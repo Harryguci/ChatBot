@@ -7,4 +7,8 @@ export default defineConfig({
   server: {
     port: 3000,
   },
+  // TODO: config vite path of build output
+  build: {
+    outDir: '../release',
+  },
 })

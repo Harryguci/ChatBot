@@ -21,6 +21,7 @@ export const useChat = () => {
   });
 
   const sendMessage = useCallback(async (content: string, attachments?: File[]) => {
+    console.log('sendMessage', content, attachments);
     const userMessage: Message = {
       id: Date.now().toString(),
       content,
