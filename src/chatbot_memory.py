@@ -268,7 +268,7 @@ class PDFChatbot:
             else:
                 confidence_info += " (Cao)"
 
-            final_answer = answer + confidence_info
+            final_answer = '<p>' + answer + confidence_info + '</p>'
             chat_history.append((query, final_answer))
             return "", chat_history
 

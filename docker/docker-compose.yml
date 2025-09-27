@@ -1,0 +1,68 @@
+version: '3.8'
+
+services:
+  # Backend FastAPI service
+  backend:
+    build:
+      context: .
+      dockerfile: DockerFile
+    container_name: chatbot-backend
+    ports:
+      - "8000:8000"
+    environment:
+      - PYTHONPATH=/app/src
+      - ENVIRONMENT=production
+    volumes:
+      - ./src:/app/src:ro
+      - ./frontend/release:/app/frontend/release:ro
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - chatbot-network
+
+  # Frontend React service (optional - for development)
+  frontend-dev:
+    build:
+      context: ./frontend
+      dockerfile: DockerFile
+    container_name: chatbot-frontend-dev
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chatbot-network
+    profiles:
+      - dev
+
+  # Nginx reverse proxy (optional - for production)
+  nginx:
+    image: nginx:alpine
+    container_name: chatbot-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - backend
+    restart: unless-stopped
+    networks:
+      - chatbot-network
+    profiles:
+      - production
+
+networks:
+  chatbot-network:
+    driver: bridge
+
+volumes:
+  chatbot-data:
+    driver: local
