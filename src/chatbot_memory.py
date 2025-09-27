@@ -29,8 +29,13 @@ class PDFChatbot:
     def setup_models(self):
         """Thiết lập các model cần thiết"""
         try:
+            logger.info(f"API Key được sử dụng: {self.google_api_key[:10]}..." if self.google_api_key else "API Key không tồn tại")
             genai.configure(api_key=self.google_api_key)
-            self.llm = genai.GenerativeModel('gemini-1.5-flash')
+            
+            # Use the working Gemini 2.0 Flash model
+            self.llm = genai.GenerativeModel('gemini-2.0-flash-exp')
+            logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-exp")
+            
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             logger.info("Đã khởi tạo thành công các model")
         except Exception as e:
@@ -217,12 +222,16 @@ class PDFChatbot:
         """Tạo câu trả lời dựa trên tài liệu và lịch sử chat"""
         try:
             if not self.documents:
-                return "Vui lòng tải lên và xử lý ít nhất một file PDF trước khi đặt câu hỏi!", chat_history
+                error_msg = "Vui lòng tải lên và xử lý ít nhất một file PDF trước khi đặt câu hỏi!"
+                chat_history.append((query, error_msg))
+                return "", chat_history
 
             relevant_docs = self.search_relevant_documents(query, top_k=5)
 
             if not relevant_docs or relevant_docs[0][1] < 0.3:
-                return "Tôi không tìm thấy thông tin đủ liên quan trong các tài liệu đã cung cấp để trả lời câu hỏi này.", chat_history
+                error_msg = "Tôi không tìm thấy thông tin đủ liên quan trong các tài liệu đã cung cấp để trả lời câu hỏi này."
+                chat_history.append((query, error_msg))
+                return "", chat_history
 
             context = ""
             for i, (doc, score, metadata) in enumerate(relevant_docs, 1):
@@ -251,7 +260,7 @@ class PDFChatbot:
             answer = response.text
 
             confidence_score = relevant_docs[0][1]
-            confidence_info = f"\n\n---\n*Độ tin cậy của nguồn chính: {confidence_score:.2%}*"
+            confidence_info = f"<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: {confidence_score:.2%}*</span>"
             if confidence_score < 0.4:
                 confidence_info += " (Thấp - Câu trả lời có thể không liên quan chặt chẽ)"
             elif confidence_score < 0.65:

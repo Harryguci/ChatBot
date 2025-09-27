@@ -1,10 +1,12 @@
 import { useState, useCallback } from 'react';
+import chatbotServices, { type ChatResponse } from '../services/chatbotServices';
 
 export interface Message {
   id: string;
   content: string;
   role: 'user' | 'assistant';
   timestamp: Date;
+  confidence?: number;
 }
 
 export interface ChatState {
@@ -37,14 +39,36 @@ export const useChat = () => {
     }));
 
     try {
-      // Mock API call - replace with actual API later
-      await new Promise(resolve => setTimeout(resolve, 1000 + Math.random() * 2000));
+      // Handle PDF attachments first
+      if (attachments && attachments.length > 0) {
+        for (const file of attachments) {
+          if (file.type === 'application/pdf') {
+            await chatbotServices.uploadPDF(file);
+          }
+        }
+      }
+
+      // Convert messages to chat history format for API
+      const chatHistory: [string, string][] = chatState.messages
+        .reduce<[string, string][]>((acc, msg, index) => {
+          if (msg.role === 'user' && index + 1 < chatState.messages.length) {
+            const nextMsg = chatState.messages[index + 1];
+            if (nextMsg.role === 'assistant') {
+              acc.push([msg.content, nextMsg.content]);
+            }
+          }
+          return acc;
+        }, []);
+
+      // Send chat request to actual API
+      const response: ChatResponse = await chatbotServices.chat(content, chatHistory);
 
       const assistantMessage: Message = {
         id: (Date.now() + 1).toString(),
-        content: `This is a mock response to: "${content}". The AI assistant would process your message and attachments here.`,
+        content: response.answer,
         role: 'assistant',
         timestamp: new Date(),
+        confidence: response.confidence,
       };
 
       setChatState(prev => ({
@@ -59,7 +83,7 @@ export const useChat = () => {
         error: error instanceof Error ? error.message : 'An error occurred',
       }));
     }
-  }, []);
+  }, [chatState.messages]);
 
   const clearChat = useCallback(() => {
     setChatState({
@@ -69,9 +93,49 @@ export const useChat = () => {
     });
   }, []);
 
+  const clearMemory = useCallback(async () => {
+    try {
+      await chatbotServices.clearMemory();
+      // Optionally clear chat as well when memory is cleared
+      clearChat();
+    } catch (error) {
+      setChatState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Failed to clear memory',
+      }));
+    }
+  }, [clearChat]);
+
+  const getMemoryStatus = useCallback(async () => {
+    try {
+      return await chatbotServices.getMemoryStatus();
+    } catch (error) {
+      setChatState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Failed to get memory status',
+      }));
+      return null;
+    }
+  }, []);
+
+  const checkHealth = useCallback(async () => {
+    try {
+      return await chatbotServices.checkHealth();
+    } catch (error) {
+      setChatState(prev => ({
+        ...prev,
+        error: error instanceof Error ? error.message : 'Health check failed',
+      }));
+      return null;
+    }
+  }, []);
+
   return {
     ...chatState,
     sendMessage,
     clearChat,
+    clearMemory,
+    getMemoryStatus,
+    checkHealth,
   };
 };
