@@ -5,6 +5,9 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 import os
 
+# Import chatbot router
+from .routers.chatbot import router as chatbot_router
+
 app = FastAPI()
 
 # Add CORS middleware
@@ -15,6 +18,9 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# Include chatbot router
+app.include_router(chatbot_router)
 
 # Mount static files from the React app release folder
 app.mount("/assets", StaticFiles(directory="frontend/release/assets"), name="assets")

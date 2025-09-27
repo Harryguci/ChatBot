@@ -154,3 +154,4 @@ Thumbs.db
 
 # build output
 frontend/release/
+.env.example

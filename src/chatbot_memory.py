@@ -11,6 +11,7 @@ import logging
 import json
 from datetime import datetime
 from pathlib import Path
+from dotenv import load_dotenv
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
@@ -269,7 +270,6 @@ class PDFChatbot:
             return "", chat_history
     # <<< END CHANGED
 
-
 def create_interface(chatbot: PDFChatbot):
     """Tạo giao diện Gradio"""
     custom_css = """
@@ -355,13 +355,20 @@ def create_interface(chatbot: PDFChatbot):
 def main():
     """Hàm chính để chạy ứng dụng"""
     print("Khởi động PDF Chatbot AI...")
-    # Thay thế bằng API key của bạn từ https://makersuite.google.com/app/apikey
-    GOOGLE_API_KEY = "AIzaSyDEvF09iSQ8RNCjcy0EApybph4rHm02frA"  # WICHTIG: Ersetzen Sie dies durch Ihren echten API-Schlüssel
-
-    # if "AIzaSyABczFjqP_eQIV2ZS-9xkUGAsdAbelmZAM" in GOOGLE_API_KEY:
-    #     print("CẢNH BÁO: Bạn đang sử dụng API key mặc định.")
-    #     print("Vui lòng cập nhật biến GOOGLE_API_KEY trong file code bằng API key của riêng bạn.")
-    #     # return # Bỏ comment dòng này nếu muốn dừng chương trình khi chưa có key
+    
+    # Load environment variables from .env file
+    load_dotenv()
+    
+    # Get Google API key from environment variable
+    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+    
+    if not GOOGLE_API_KEY:
+        print("LỖI: Không tìm thấy GOOGLE_API_KEY trong biến môi trường.")
+        print("Vui lòng:")
+        print("1. Tạo file .env trong thư mục gốc của dự án")
+        print("2. Thêm dòng: GOOGLE_API_KEY=your_api_key_here")
+        print("3. Thay 'your_api_key_here' bằng API key thực của bạn từ https://makersuite.google.com/app/apikey")
+        return
 
     try:
         chatbot = PDFChatbot(GOOGLE_API_KEY)
