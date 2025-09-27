@@ -14,9 +14,9 @@ import sys
 # Add src to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
-from main import app
-from routers.chatbot import get_chatbot, chatbot_instance
-from chatbot_memory import PDFChatbot
+from src.main import app
+from src.routers.chatbot import get_chatbot, chatbot_instance
+from src.chatbot_memory import PDFChatbot
 
 @pytest.fixture(scope="session")
 def test_client():

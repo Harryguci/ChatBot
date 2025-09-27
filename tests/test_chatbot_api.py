@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from fastapi import status
 import json
 
-from routers.chatbot import router, get_chatbot, chatbot_instance
+from src.routers.chatbot import router, get_chatbot, chatbot_instance
 
 
 class TestChatbotAPI:
@@ -18,7 +18,7 @@ class TestChatbotAPI:
     
     def test_health_check_healthy(self, test_client):
         """Test health check endpoint when service is healthy."""
-        with patch('routers.chatbot.chatbot_instance', None):
+        with patch('src.routers.chatbot.chatbot_instance', None):
             response = test_client.get("/api/chatbot/health")
             assert response.status_code == status.HTTP_200_OK
             data = response.json()
@@ -28,14 +28,14 @@ class TestChatbotAPI:
     def test_health_check_no_api_key(self, test_client):
         """Test health check endpoint when API key is not configured."""
         with patch.dict(os.environ, {}, clear=True):
-            with patch('routers.chatbot.chatbot_instance', None):
+            with patch('src.routers.chatbot.chatbot_instance', None):
                 response = test_client.get("/api/chatbot/health")
                 assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
                 data = response.json()
                 assert data["status"] == "unhealthy"
                 assert "Google API key not configured" in data["reason"]
     
-    @patch('routers.chatbot.PDFChatbot')
+    @patch('src.routers.chatbot.PDFChatbot')
     def test_upload_pdf_success(self, mock_pdf_chatbot_class, test_client, mock_pdf_file):
         """Test successful PDF upload and processing."""
         # Setup mock
@@ -319,7 +319,7 @@ class TestChatbotDependency:
                 get_chatbot()
             assert "Google API key not found" in str(exc_info.value)
     
-    @patch('routers.chatbot.PDFChatbot')
+    @patch('src.routers.chatbot.PDFChatbot')
     def test_get_chatbot_success(self, mock_pdf_chatbot_class):
         """Test successful chatbot initialization."""
         mock_chatbot = Mock()
@@ -330,7 +330,7 @@ class TestChatbotDependency:
             assert result == mock_chatbot
             mock_pdf_chatbot_class.assert_called_once_with("test_key")
     
-    @patch('routers.chatbot.PDFChatbot')
+    @patch('src.routers.chatbot.PDFChatbot')
     def test_get_chatbot_initialization_error(self, mock_pdf_chatbot_class):
         """Test get_chatbot when initialization fails."""
         mock_pdf_chatbot_class.side_effect = Exception("Init failed")

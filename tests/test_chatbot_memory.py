@@ -42,7 +42,7 @@ class TestPDFChatbot:
         
         # Verify mocks were called
         mock_genai.configure.assert_called_once_with(api_key="test_api_key")
-        mock_genai.GenerativeModel.assert_called_once_with('gemini-1.5-flash')
+        mock_genai.GenerativeModel.assert_called_once_with('gemini-2.0-flash-exp')
         mock_sentence_transformer.assert_called_once_with('paraphrase-multilingual-MiniLM-L12-v2')
     
     @patch('chatbot_memory.genai')
