@@ -29,6 +29,7 @@ class ChatResponse(BaseModel):
     answer: str
     chat_history: List[tuple]
     confidence: Optional[float] = None
+    source_files: Optional[List[str]] = None
 
 class ProcessPDFResponse(BaseModel):
     status: str
@@ -39,6 +40,10 @@ class MemoryStatus(BaseModel):
     processed_files: List[str]
     total_chunks: int
     total_documents: int
+    vintern_enabled: bool
+    vintern_documents: int
+    vintern_text_documents: int
+    vintern_image_documents: int
 
 # Dependency to get chatbot instance
 def get_chatbot() -> PDFChatbot:
@@ -58,6 +63,63 @@ def get_chatbot() -> PDFChatbot:
             raise HTTPException(status_code=500, detail=f"Failed to initialize chatbot: {str(e)}")
     return chatbot_instance
 
+@router.post("/upload-document", response_model=ProcessPDFResponse)
+async def upload_and_process_document(
+    file: UploadFile = File(...),
+    chatbot: PDFChatbot = Depends(get_chatbot)
+):
+    """
+    Upload and process a PDF file or image for the chatbot to use in answering questions.
+    Supports PDF, JPG, PNG, BMP, GIF, TIFF, and WEBP files.
+    """
+    try:
+        # Validate file type
+        file_extension = file.filename.lower().split('.')[-1] if '.' in file.filename else ''
+        supported_extensions = ['pdf', 'jpg', 'jpeg', 'png', 'bmp', 'gif', 'tiff', 'webp']
+        
+        if file_extension not in supported_extensions:
+            raise HTTPException(
+                status_code=400, 
+                detail=f"Unsupported file type. Supported formats: {', '.join(supported_extensions)}"
+            )
+        
+        # Create temporary file with appropriate extension
+        file_suffix = f'.{file_extension}'
+        with tempfile.NamedTemporaryFile(delete=False, suffix=file_suffix) as tmp_file:
+            content = await file.read()
+            tmp_file.write(content)
+            tmp_file_path = tmp_file.name
+        
+        try:
+            # Process the document (PDF or image) using the original filename
+            status_message, processed_files_markdown = chatbot.process_document(tmp_file_path, original_filename=file.filename)
+            
+            # Extract total chunks from status message if available
+            total_chunks = None
+            if "Tổng số chunks trong bộ nhớ:" in status_message:
+                try:
+                    chunks_text = status_message.split("Tổng số chunks trong bộ nhớ: ")[1].split(",")[0]
+                    total_chunks = int(chunks_text)
+                except:
+                    pass
+            
+            return ProcessPDFResponse(
+                status=status_message,
+                processed_files=processed_files_markdown,
+                total_chunks=total_chunks
+            )
+        
+        finally:
+            # Clean up temporary file
+            if os.path.exists(tmp_file_path):
+                os.unlink(tmp_file_path)
+                
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error processing document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
+
 @router.post("/upload-pdf", response_model=ProcessPDFResponse)
 async def upload_and_process_pdf(
     file: UploadFile = File(...),
@@ -65,11 +127,12 @@ async def upload_and_process_pdf(
 ):
     """
     Upload and process a PDF file for the chatbot to use in answering questions.
+    This endpoint is kept for backward compatibility. Use /upload-document for both PDF and images.
     """
     try:
-        # Validate file type
+        # Validate file type - only PDF
         if not file.filename.lower().endswith('.pdf'):
-            raise HTTPException(status_code=400, detail="Only PDF files are supported")
+            raise HTTPException(status_code=400, detail="Only PDF files are supported for this endpoint. Use /upload-document for images.")
         
         # Create temporary file
         with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf') as tmp_file:
@@ -78,8 +141,8 @@ async def upload_and_process_pdf(
             tmp_file_path = tmp_file.name
         
         try:
-            # Process the PDF
-            status_message, processed_files_markdown = chatbot.process_pdf(tmp_file_path)
+            # Process the PDF using the original filename
+            status_message, processed_files_markdown = chatbot.process_document(tmp_file_path, original_filename=file.filename)
             
             # Extract total chunks from status message if available
             total_chunks = None
@@ -120,7 +183,7 @@ async def chat_with_documents(
             raise HTTPException(status_code=400, detail="Query cannot be empty")
         
         # Generate answer
-        _, updated_chat_history = chatbot.generate_answer(request.query, request.chat_history)
+        _, updated_chat_history, source_files = chatbot.generate_answer(request.query, request.chat_history)
         
         # Extract the latest answer and confidence score
         if updated_chat_history:
@@ -138,7 +201,8 @@ async def chat_with_documents(
             return ChatResponse(
                 answer=latest_answer,
                 chat_history=updated_chat_history,
-                confidence=confidence
+                confidence=confidence,
+                source_files=source_files
             )
         else:
             raise HTTPException(status_code=500, detail="Failed to generate answer")
@@ -172,11 +236,21 @@ async def get_memory_status(chatbot: PDFChatbot = Depends(get_chatbot)):
         processed_files = list(chatbot.processed_files)
         total_chunks = len(chatbot.documents)
         total_documents = len(chatbot.document_metadata)
-        
+
+        vintern_enabled = getattr(chatbot, 'vintern_enabled', False)
+        vintern_meta = getattr(chatbot, 'vintern_doc_metadata', []) if vintern_enabled else []
+        vintern_documents = len(vintern_meta)
+        vintern_text_documents = sum(1 for m in vintern_meta if m.get('type') == 'text') if vintern_meta else 0
+        vintern_image_documents = sum(1 for m in vintern_meta if m.get('type') == 'image') if vintern_meta else 0
+
         return MemoryStatus(
             processed_files=processed_files,
             total_chunks=total_chunks,
-            total_documents=total_documents
+            total_documents=total_documents,
+            vintern_enabled=vintern_enabled,
+            vintern_documents=vintern_documents,
+            vintern_text_documents=vintern_text_documents,
+            vintern_image_documents=vintern_image_documents
         )
     except Exception as e:
         logger.error(f"Error getting memory status: {str(e)}")

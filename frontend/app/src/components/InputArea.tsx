@@ -1,5 +1,6 @@
 import React, { useState, useRef } from 'react';
-import { AiOutlineClose, AiOutlinePlus, AiOutlinePicture, AiOutlineSend as AiSend } from "react-icons/ai";
+import { AiOutlineClose, AiOutlinePlus, AiOutlineSend as AiSend, AiOutlinePicture } from "react-icons/ai";
+import useDocuments from '../hooks/useDocuments';
 
 interface InputAreaProps {
   onSendMessage: (message: string, attachments?: File[]) => void;
@@ -12,6 +13,66 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const imageInputRef = useRef<HTMLInputElement>(null);
 
+  const { documents, addDocument, removeDocument } = useDocuments();
+  
+  const getUniqueName = (originalName: string, takenNames: Set<string>): string => {
+    const dotIndex = originalName.lastIndexOf('.');
+    const hasExt = dotIndex > 0;
+    const base = hasExt ? originalName.slice(0, dotIndex) : originalName;
+    const ext = hasExt ? originalName.slice(dotIndex) : '';
+    let candidate = originalName;
+    let counter = 1;
+    while (takenNames.has(candidate)) {
+      candidate = `${base} (${counter})${ext}`;
+      counter += 1;
+    }
+    takenNames.add(candidate);
+    return candidate;
+  };
+
+  // Helper function to generate base64 preview for images
+  const generateImagePreview = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        const img = new Image();
+        img.onload = () => {
+          // Create canvas to compress the image
+          const canvas = document.createElement('canvas');
+          const ctx = canvas.getContext('2d');
+          
+          // Set canvas dimensions (max 300px width/height for preview)
+          const maxSize = 800;
+          let { width, height } = img;
+          
+          if (width > height) {
+            if (width > maxSize) {
+              height = (height * maxSize) / width;
+              width = maxSize;
+            }
+          } else {
+            if (height > maxSize) {
+              width = (width * maxSize) / height;
+              height = maxSize;
+            }
+          }
+          
+          canvas.width = width;
+          canvas.height = height;
+          
+          // Draw and compress image
+          ctx?.drawImage(img, 0, 0, width, height);
+          const compressedBase64 = canvas.toDataURL('image/jpeg', 0.9); // 90% quality
+          resolve(compressedBase64);
+        };
+        img.onerror = reject;
+        img.src = e.target?.result as string;
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(file);
+    });
+  };
+  
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (message.trim() || attachments.length > 0) {
@@ -21,41 +82,114 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
     }
   };
 
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
-    const pdfFiles = files.filter(file => file.type === 'application/pdf');
-    setAttachments(prev => [...prev, ...pdfFiles]);
+    // Support both PDF and image files
+    const supportedFiles = files.filter(file => 
+      file.type === 'application/pdf' || 
+      file.type.startsWith('image/')
+    );
+    const taken = new Set<string>([...attachments.map(f => f.name), ...documents.map(d => d.name)]);
+    const renamed: File[] = supportedFiles.map(file => {
+      const uniqueName = getUniqueName(file.name, taken);
+      return uniqueName === file.name
+        ? file
+        : new File([file], uniqueName, { type: file.type, lastModified: file.lastModified });
+    });
+    setAttachments(prev => [...prev, ...renamed]);
+    
+    // Process each file and add to documents
+    for (const file of renamed) {
+      if (file.type.startsWith('image/')) {
+        try {
+          const preview = await generateImagePreview(file);
+          addDocument({ 
+            name: file.name, 
+            file_path: file.name,
+            preview: preview
+          });
+        } catch (error) {
+          console.error('Error generating preview for', file.name, error);
+          addDocument({ 
+            name: file.name, 
+            file_path: file.name
+          });
+        }
+      } else {
+        addDocument({ 
+          name: file.name, 
+          file_path: file.name
+        });
+      }
+    }
   };
 
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
+    // Only allow image files
     const imageFiles = files.filter(file => file.type.startsWith('image/'));
-    setAttachments(prev => [...prev, ...imageFiles]);
+    const taken = new Set<string>([...attachments.map(f => f.name), ...documents.map(d => d.name)]);
+    const renamed: File[] = imageFiles.map(file => {
+      const uniqueName = getUniqueName(file.name, taken);
+      return uniqueName === file.name
+        ? file
+        : new File([file], uniqueName, { type: file.type, lastModified: file.lastModified });
+    });
+    setAttachments(prev => [...prev, ...renamed]);
+    
+    // Process each image file and add to documents with preview
+    for (const file of renamed) {
+      try {
+        const preview = await generateImagePreview(file);
+        addDocument({ 
+          name: file.name, 
+          file_path: file.name,
+          preview: preview
+        });
+      } catch (error) {
+        console.error('Error generating preview for', file.name, error);
+        addDocument({ 
+          name: file.name, 
+          file_path: file.name
+        });
+      }
+    }
   };
 
   const removeAttachment = (index: number) => {
     setAttachments(prev => prev.filter((_, i) => i !== index));
+    
+    const documentToRemove = documents[index];
+    removeDocument(documentToRemove);
   };
 
   return (
     <div className="border-t border-gray-200 p-4">
       {/* Attachments Preview */}
-      {attachments.length > 0 && (
+      {documents.length > 0 && (
         <div className="mb-4 flex flex-wrap gap-2">
-          {attachments.map((file, index) => (
-            <div
-              key={index}
-              className="flex items-center space-x-2 bg-gray-100 rounded-lg px-3 py-2 text-sm"
-            >
-              <span className="text-gray-600 truncate max-w-32">{file.name}</span>
-              <button
-                onClick={() => removeAttachment(index)}
-                className="text-gray-400 hover:text-gray-600"
+          {documents.map((document, index) => {
+            const isImage = document.name.match(/\.(jpg|jpeg|png|gif|bmp|tiff|webp)$/i);
+            return (
+              <div
+                key={`${document.file_path}-${index}`}
+                className="flex items-center space-x-2 bg-gray-100 rounded-lg px-3 py-2 text-sm"
               >
-                <AiOutlineClose className="w-4 h-4" />
-              </button>
-            </div>
-          ))}
+                {isImage ? (
+                  <AiOutlinePicture className="w-4 h-4 text-blue-500" />
+                ) : (
+                  <span className="text-red-500 text-xs font-bold">PDF</span>
+                )}
+                <span className="text-gray-600 truncate max-w-32">{document.name}</span>
+                <button
+                  onClick={() => removeAttachment(index)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <AiOutlineClose className="w-4 h-4" />
+                </button>
+              </div>
+            );
+          })}
         </div>
       )}
 
@@ -81,7 +215,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
                   disabled={isLoading}
                 >
                   <AiOutlinePlus className="w-4 h-4" />
-                  <span>Add Attachment</span>
+                  <span>Add Files</span>
                 </button>
                 <button
                   type="button"
@@ -90,7 +224,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
                   disabled={isLoading}
                 >
                   <AiOutlinePicture className="w-4 h-4" />
-                  <span>Use Image</span>
+                  <span>Add Images</span>
                 </button>
               </div>
               <div className="flex items-center space-x-2">
@@ -124,7 +258,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
       <input
         ref={fileInputRef}
         type="file"
-        accept=".pdf"
+        accept=".pdf,.jpg,.jpeg,.png,.bmp,.gif,.tiff,.webp"
         multiple
         onChange={handleFileUpload}
         className="hidden"

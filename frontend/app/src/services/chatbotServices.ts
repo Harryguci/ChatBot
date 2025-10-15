@@ -16,7 +16,23 @@ interface ChatResponse {
   answer: string;
   chat_history: [string, string][];
   confidence?: number;
+  source_files?: string[];
 }
+// Sample response:
+// {
+//   "answer": "<p>Người điều khiển xe chạy quá tốc độ quy định gây tai nạn giao thông sẽ bị phạt tiền từ 6.000.000 đồng đến 8.000.000 đồng (theo file download (5).png). Ngoài ra, nếu chạy quá tốc độ quy định trên 20 km/h thì bị phạt tiền từ 3.000.000 đồng đến 5.000.000 đồng (theo file download (5).png).\n<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: 68.88%*</span> (Cao)</p>",
+//   "chat_history": [
+//     [
+//       "Đi xe vượt quá tốc độ gây tai nạn bị phạt bao nhiêu tiền?",
+//       "<p>Người điều khiển xe chạy quá tốc độ quy định gây tai nạn giao thông sẽ bị phạt tiền từ 6.000.000 đồng đến 8.000.000 đồng (theo file download (5).png). Ngoài ra, nếu chạy quá tốc độ quy định trên 20 km/h thì bị phạt tiền từ 3.000.000 đồng đến 5.000.000 đồng (theo file download (5).png).\n<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: 68.88%*</span> (Cao)</p>"
+//     ]
+//   ],
+//   "confidence": 0.6888,
+//   "source_files": [
+//     "download (5).png",
+//     "download (1).png"
+//   ]
+// }
 
 interface MemoryStatus {
   processed_files: string[];
@@ -75,7 +91,48 @@ const chatbotServices = {
   },
 
   /**
-   * Upload and process a PDF file
+   * Upload and process a document (PDF or image)
+   * @param file - The document file to upload (PDF or image)
+   * @returns Promise<ProcessPDFResponse>
+   */
+  async uploadDocument(file: File): Promise<ProcessPDFResponse> {
+    try {
+      // Validate file type
+      const supportedTypes = [
+        'application/pdf',
+        'image/jpeg',
+        'image/jpg', 
+        'image/png',
+        'image/bmp',
+        'image/gif',
+        'image/tiff',
+        'image/webp'
+      ];
+
+      if (!supportedTypes.includes(file.type)) {
+        throw new Error('Unsupported file type. Supported formats: PDF, JPG, PNG, BMP, GIF, TIFF, WEBP');
+      }
+
+      const formData = new FormData();
+      formData.append('file', file);
+
+      const response = await fetch(`${CHATBOT_API_BASE_URL}/upload-document`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+
+      return await response.json();
+    } catch (error) {
+      throw new Error(`Document upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  },
+
+  /**
+   * Upload and process a PDF file (legacy method for backward compatibility)
    * @param file - The PDF file to upload
    * @returns Promise<ProcessPDFResponse>
    */
@@ -83,7 +140,7 @@ const chatbotServices = {
     try {
       // Validate file type
       if (file.type !== 'application/pdf') {
-        throw new Error('Only PDF files are supported');
+        throw new Error('Only PDF files are supported for this endpoint. Use uploadDocument for images.');
       }
 
       const formData = new FormData();

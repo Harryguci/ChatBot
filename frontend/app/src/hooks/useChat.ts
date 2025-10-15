@@ -7,6 +7,7 @@ export interface Message {
   role: 'user' | 'assistant';
   timestamp: Date;
   confidence?: number;
+  source_files?: string[];
 }
 
 export interface ChatState {
@@ -39,11 +40,15 @@ export const useChat = () => {
     }));
 
     try {
-      // Handle PDF attachments first
+      // Handle document attachments first (PDF or images)
       if (attachments && attachments.length > 0) {
         for (const file of attachments) {
-          if (file.type === 'application/pdf') {
-            await chatbotServices.uploadPDF(file);
+          // Check if it's a supported file type
+          const isPDF = file.type === 'application/pdf';
+          const isImage = file.type.startsWith('image/');
+          
+          if (isPDF || isImage) {
+            await chatbotServices.uploadDocument(file);
           }
         }
       }
@@ -69,6 +74,7 @@ export const useChat = () => {
         role: 'assistant',
         timestamp: new Date(),
         confidence: response.confidence,
+        source_files: response.source_files,
       };
 
       setChatState(prev => ({
