@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
@@ -6,11 +7,58 @@ import uvicorn
 import os
 from dotenv import load_dotenv
 
+from src.config.db.services import system_log_service
+
 # Load environment variables from .env file
 load_dotenv()
 
 # Import chatbot router
-from .routers.chatbot import router as chatbot_router
+from src.routers.chatbot import router as chatbot_router
+
+# Import database connection
+from src.config.db import get_database_connection, initialize_database
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan manager for database initialization."""
+    # Startup
+    try:
+        # Initialize database connection
+        db = initialize_database()
+        
+        # Test connection
+        if db.test_connection():
+            print("✓ Database connection established")
+            system_log_service.log_event(
+                level="INFO",
+                logger_name="app.startup",
+                message="Database connection established successfully"
+            )
+        else:
+            print("✗ Database connection failed")
+            system_log_service.log_event(
+                level="ERROR", 
+                logger_name="app.startup",
+                message="Database connection failed"
+            )
+            
+    except Exception as e:
+        print(f"✗ Database initialization failed: {str(e)}")
+        system_log_service.log_event(
+            level="ERROR",
+            logger_name="app.startup", 
+            message=f"Database initialization failed: {str(e)}"
+        )
+    
+    yield
+    
+    # Shutdown
+    try:
+        from src.config.db import close_database
+        close_database()
+        print("✓ Database connection closed")
+    except Exception as e:
+        print(f"✗ Error closing database: {str(e)}")
 
 app = FastAPI()
 
@@ -38,6 +86,24 @@ async def serve_vite_svg():
 @app.get("/api/")
 def read_root():
     return {"message": "Hello World"}
+
+@app.get("/api/health")
+def health_check():
+    """Health check endpoint with database status."""
+    try:
+        db = get_database_connection()
+        db_status = "connected" if db.test_connection() else "disconnected"
+        return {
+            "status": "healthy",
+            "database": db_status,
+            "message": "Chatbot API is running"
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy", 
+            "database": "error",
+            "error": str(e)
+        }
 
 # SPA fallback - serve React app for all other routes
 @app.get("/{full_path:path}")
