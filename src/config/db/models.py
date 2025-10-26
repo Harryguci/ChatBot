@@ -9,6 +9,7 @@ from sqlalchemy import (
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship
 from sqlalchemy.dialects.postgresql import UUID
+from pgvector.sqlalchemy import Vector
 from datetime import datetime
 import uuid
 
@@ -48,7 +49,6 @@ class Document(Base):
     file_type = Column(String(50), nullable=False)
     file_path = Column(String(1000), nullable=True)
     file_size = Column(Integer, nullable=True)
-    content_hash = Column(String(64), unique=True, nullable=False, index=True)
     processing_status = Column(String(50), default='pending', nullable=False)
     extra_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -72,8 +72,12 @@ class DocumentChunk(Base):
     heading = Column(String(500), nullable=True)
     content = Column(Text, nullable=False)
     content_length = Column(Integer, nullable=False)
-    embedding = Column(JSON, nullable=True)  # Array of floats stored as JSON
+    # Using pgvector Vector type for efficient similarity search
+    # Dimension 384 is for sentence-transformers models, 1536 for OpenAI embeddings
+    embedding = Column(Vector(384), nullable=True)  # Vector embedding using pgvector
     embedding_model = Column(String(255), nullable=True)
+    vintern_embedding = Column(Vector(768), nullable=True)  # Vintern multimodal embedding
+    vintern_model = Column(String(255), nullable=True)  # Store model version
     extra_metadata = Column(JSON, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
@@ -82,6 +86,8 @@ class DocumentChunk(Base):
     
     __table_args__ = (
         Index('ix_document_chunks_doc_index', 'document_id', 'chunk_index'),
+        Index('ix_document_chunks_embedding_cosine', 'embedding', postgresql_ops={'embedding': 'vector_cosine_ops'}),
+        Index('ix_document_chunks_vintern_embedding_cosine', 'vintern_embedding', postgresql_ops={'vintern_embedding': 'vector_cosine_ops'}),
     )
     
     def __repr__(self):
@@ -154,16 +160,15 @@ class EmbeddingCache(Base):
     __tablename__ = 'embedding_cache'
     
     id = Column(Integer, primary_key=True, index=True)
-    content_hash = Column(String(64), nullable=False, index=True)
+    content_hash = Column(String(64), nullable=False)
     content = Column(Text, nullable=False)
     embedding = Column(JSON, nullable=False)  # Array of floats
     model_name = Column(String(255), nullable=False)
     model_version = Column(String(50), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     
-    __table_args__ = (
-        Index('ix_embedding_cache_content_hash', 'content_hash', 'model_name'),
-    )
+    # Note: Index will be created manually after table creation to avoid conflicts
+    # Index('ix_embedding_cache_content_hash', 'content_hash', 'model_name'),
     
     def __repr__(self):
         return f"<EmbeddingCache(id={self.id}, content_hash='{self.content_hash}', model='{self.model_name}')>"

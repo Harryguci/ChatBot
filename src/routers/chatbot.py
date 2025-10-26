@@ -45,6 +45,17 @@ class MemoryStatus(BaseModel):
     vintern_text_documents: int
     vintern_image_documents: int
 
+class DocumentInfo(BaseModel):
+    filename: str
+    file_type: str
+    chunks_count: int
+    heading: str
+    preview: str
+
+class DocumentsListResponse(BaseModel):
+    documents: List[DocumentInfo]
+    total_documents: int
+
 # Dependency to get chatbot instance
 def get_chatbot() -> PDFChatbot:
     global chatbot_instance
@@ -281,3 +292,39 @@ async def health_check():
             status_code=503,
             content={"status": "unhealthy", "reason": str(e)}
         )
+
+@router.get("/memorable-documents", response_model=DocumentsListResponse)
+async def list_documents(chatbot: PDFChatbot = Depends(get_chatbot)):
+    """
+    Get the list of all processed documents with detailed information.
+    """
+    try:
+        documents_info = chatbot.get_documents_list()
+        return DocumentsListResponse(
+            documents=documents_info,
+            total_documents=len(documents_info)
+        )
+    except Exception as e:
+        logger.error(f"Error getting documents list: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting documents list: {str(e)}")
+
+@router.delete("/memorable-documents/{filename:path}")
+async def delete_document(filename: str, chatbot: PDFChatbot = Depends(get_chatbot)):
+    """
+    Delete a specific document from memory by filename.
+    """
+    try:
+        success, message = chatbot.delete_document(filename)
+        
+        if success:
+            return JSONResponse(
+                content={"message": message, "status": "success"}
+            )
+        else:
+            raise HTTPException(status_code=404, detail=message)
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Error deleting document: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error deleting document: {str(e)}")

@@ -18,9 +18,40 @@ import io
 import torch
 from transformers import AutoModel, AutoProcessor
 
+# Import database services
+from src.config.db.services import (
+    document_service, document_chunk_service, embedding_cache_service
+)
+from src.config.db.db_connection import get_database_connection
+from src.config.db.models import Document, DocumentChunk
+
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+
+def vector_to_numpy(embedding) -> np.ndarray:
+    """
+    Convert pgvector Vector type to numpy array.
+    
+    Args:
+        embedding: Vector embedding from database (pgvector type)
+        
+    Returns:
+        numpy array of the embedding
+    """
+    if embedding is None:
+        return None
+    if isinstance(embedding, np.ndarray):
+        return embedding
+    if isinstance(embedding, list):
+        return np.array(embedding, dtype=np.float32)
+    # For pgvector Vector type, it should be convertible directly
+    try:
+        return np.array(embedding, dtype=np.float32)
+    except Exception as e:
+        logger.warning(f"Error converting embedding to numpy: {str(e)}")
+        return None
 
 class PDFChatbot:
     def __init__(self, google_api_key: str):
@@ -29,6 +60,7 @@ class PDFChatbot:
         self.setup_models()
         # >>> CHANGED: Khởi tạo các thuộc tính để lưu trữ trạng thái qua nhiều file
         self.clear_memory()
+        self.load_documents_from_database() # Load documents from DB on startup
         # <<< END CHANGED
 
     def setup_models(self):
@@ -83,6 +115,86 @@ class PDFChatbot:
             "Sẵn sàng xử lý file mới...", # Reset status
             "Chưa có tài liệu nào được xử lý." # Reset danh sách file
         )
+    
+    def load_documents_from_database(self):
+        """Load all documents from database into memory on startup."""
+        try:
+            logger.info("Loading documents from database...")
+            documents = document_service.get_all_processed_documents()
+            
+            if not documents:
+                logger.info("No documents found in database.")
+                return
+            
+            all_embeddings_list = []
+            all_documents = []
+            all_metadata = []
+            
+            for doc in documents:
+                logger.info(f"Loading document: {doc.filename} (ID: {doc.id})")
+                
+                # Get chunks for this document
+                chunks = document_chunk_service.get_chunks_by_document(doc.id)
+                
+                if not chunks:
+                    logger.warning(f"No chunks found for document {doc.filename}")
+                    continue
+                
+                # Add filename to processed_files
+                self.processed_files.add(doc.filename)
+                
+                # Load chunks into memory
+                for chunk in chunks:
+                    all_documents.append(chunk.content)
+                    all_metadata.append({
+                        'chunk_id': chunk.id,
+                        'source_file': doc.filename,
+                        'file_type': doc.file_type,
+                        'heading': chunk.heading or '',
+                        'length': len(chunk.content),
+                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content
+                    })
+                    
+                    # Collect embeddings
+                    if chunk.embedding:
+                        embedding_array = vector_to_numpy(chunk.embedding)
+                        if embedding_array is not None:
+                            all_embeddings_list.append(embedding_array)
+                
+                # Load Vintern embeddings if available
+                if getattr(self, 'vintern_enabled', False):
+                    try:
+                        for chunk in chunks:
+                            if chunk.vintern_embedding:
+                                # Convert Vector to numpy array and then to tensor
+                                vintern_array = vector_to_numpy(chunk.vintern_embedding)
+                                if vintern_array is not None:
+                                    vintern_tensor = torch.tensor(vintern_array, dtype=torch.float32)
+                                    self.vintern_doc_embeddings.append(vintern_tensor)
+                                    self.vintern_doc_metadata.append({
+                                        'type': 'text',
+                                        'source_file': doc.filename,
+                                        'file_type': doc.file_type,
+                                        'heading': chunk.heading or '',
+                                        'content': chunk.content,
+                                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
+                                    })
+                    except Exception as e:
+                        logger.warning(f"Error loading Vintern embeddings from database: {str(e)}")
+            
+            # Set documents and metadata
+            self.documents = all_documents
+            self.document_metadata = all_metadata
+            
+            # Rebuild embeddings array
+            if all_embeddings_list:
+                self.embeddings = np.array(all_embeddings_list)
+                logger.info(f"Loaded {len(all_documents)} chunks from {len(documents)} documents")
+            else:
+                logger.warning("No embeddings found in database chunks")
+                
+        except Exception as e:
+            logger.error(f"Error loading documents from database: {str(e)}")
     # <<< END CHANGED
 
     def extract_text_from_pdf(self, pdf_path: str) -> str:
@@ -210,6 +322,52 @@ class PDFChatbot:
             logger.error(f"Lỗi tạo embeddings: {str(e)}")
             raise
 
+    def vintern_embed_texts(self, texts: List[str]) -> List[torch.Tensor]:
+        """Create Vintern embeddings for texts."""
+        try:
+            if not self.vintern_enabled:
+                return []
+            
+            batch_docs = self.vintern_processor.process_docs(texts)
+            
+            # Move to device
+            batch_docs["input_ids"] = batch_docs["input_ids"].to(self.vintern_device)
+            batch_docs["attention_mask"] = batch_docs["attention_mask"].to(self.vintern_device)
+            if self.vintern_dtype != torch.float32:
+                batch_docs["attention_mask"] = batch_docs["attention_mask"].to(self.vintern_dtype)
+            
+            with torch.no_grad():
+                embeddings = self.vintern_model(**batch_docs)
+            
+            return list(embeddings)
+        except Exception as e:
+            logger.error(f"Lỗi tạo Vintern embeddings cho text: {str(e)}")
+            return []
+
+    def vintern_embed_images(self, images: List[Image.Image]) -> List[torch.Tensor]:
+        """Create Vintern embeddings for images."""
+        try:
+            if not self.vintern_enabled:
+                return []
+            
+            batch_images = self.vintern_processor.process_images(images)
+            
+            # Move to device
+            batch_images["pixel_values"] = batch_images["pixel_values"].to(self.vintern_device)
+            batch_images["input_ids"] = batch_images["input_ids"].to(self.vintern_device)
+            batch_images["attention_mask"] = batch_images["attention_mask"].to(self.vintern_device)
+            if self.vintern_dtype != torch.float32:
+                batch_images["attention_mask"] = batch_images["attention_mask"].to(self.vintern_dtype)
+                batch_images["pixel_values"] = batch_images["pixel_values"].to(self.vintern_dtype)
+            
+            with torch.no_grad():
+                embeddings = self.vintern_model(**batch_images)
+            
+            return list(embeddings)
+        except Exception as e:
+            logger.error(f"Lỗi tạo Vintern embeddings cho ảnh: {str(e)}")
+            return []
+
     # >>> CHANGED: Cập nhật hàm xử lý để hỗ trợ cả PDF và hình ảnh
     def process_document(self, file_path: str, original_filename: str = None) -> Tuple[str, str]:
         """Xử lý file PDF hoặc hình ảnh và thêm vào 'bộ nhớ' của chatbot."""
@@ -263,33 +421,143 @@ class PDFChatbot:
                     'preview': chunk_data['content'][:150] + "..."
                 })
             
-            # 4. Tạo embeddings cho các chunk mới
+            # 4. Check if document already exists in database by filename
+            existing_doc = document_service.check_document_exists_by_filename(file_name, file_name)
+            if existing_doc:
+                logger.info(f"Document '{file_name}' already exists in database")
+                # Load existing chunks into memory for search
+                chunks = document_chunk_service.get_chunks_by_document(existing_doc.id)
+                for chunk in chunks:
+                    self.documents.append(chunk.content)
+                    self.document_metadata.append({
+                        'chunk_id': chunk.id,
+                        'source_file': file_name,
+                        'file_type': file_type,
+                        'heading': chunk.heading or '',
+                        'length': len(chunk.content),
+                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content
+                    })
+                # Rebuild embeddings array
+                if chunks:
+                    embeddings_list = [vector_to_numpy(chunk.embedding) for chunk in chunks if chunk.embedding]
+                    # Filter out None values
+                    embeddings_list = [emb for emb in embeddings_list if emb is not None]
+                    if embeddings_list:
+                        # Append to existing embeddings if they exist
+                        if self.embeddings is not None:
+                            self.embeddings = np.vstack([self.embeddings, np.array(embeddings_list)])
+                        else:
+                            self.embeddings = np.array(embeddings_list)
+                
+                # Load Vintern embeddings from database
+                if getattr(self, 'vintern_enabled', False) and chunks:
+                    try:
+                        for chunk in chunks:
+                            if chunk.vintern_embedding:
+                                # Convert Vector to numpy array and then to tensor
+                                vintern_array = vector_to_numpy(chunk.vintern_embedding)
+                                if vintern_array is not None:
+                                    vintern_tensor = torch.tensor(vintern_array, dtype=torch.float32)
+                                    self.vintern_doc_embeddings.append(vintern_tensor)
+                                    self.vintern_doc_metadata.append({
+                                        'type': 'text',
+                                        'source_file': file_name,
+                                        'file_type': file_type,
+                                        'heading': chunk.heading or '',
+                                        'content': chunk.content,
+                                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
+                                    })
+                    except Exception as e:
+                        logger.warning(f"Không thể tải Vintern embeddings từ database: {str(e)}")
+                
+                self.processed_files.add(file_name)
+                return f"Document '{file_name}' loaded from database.", self._get_processed_files_markdown()
+            
+            # 6. Create new document in database
+            file_size = os.path.getsize(file_path) if os.path.exists(file_path) else None
+            doc = document_service.create_document(
+                filename=file_name,
+                original_filename=file_name,
+                file_type=file_type,
+                file_path=file_path if os.path.exists(file_path) else None,
+                file_size=file_size
+            )
+            logger.info(f"Created document in database: {doc.id}")
+            
+            # 7. Create embeddings
             new_embeddings = self.create_embeddings(new_documents)
+            
+            # 8. Save chunks to database with embeddings
+            vintern_text_embs = []
+            if getattr(self, 'vintern_enabled', False):
+                vintern_text_embs = self.vintern_embed_texts(new_documents)
+            
+            for i, chunk_data in enumerate(structured_chunks):
+                combined_text = f"Tiêu đề: {chunk_data['heading']}\nNội dung: {chunk_data['content']}"
+                
+                # Convert numpy embedding to list for JSON storage
+                embedding_list = new_embeddings[i].tolist() if i < len(new_embeddings) else None
+                
+                # Convert Vintern embedding (tensor to list)
+                vintern_emb = None
+                if vintern_text_embs and i < len(vintern_text_embs):
+                    # Convert tensor to CPU and then to list
+                    vintern_emb = vintern_text_embs[i].cpu().numpy().tolist() if torch.is_tensor(vintern_text_embs[i]) else vintern_text_embs[i]
+                
+                chunk = document_chunk_service.create_chunk(
+                    document_id=doc.id,
+                    chunk_index=i,
+                    heading=chunk_data['heading'],
+                    content=combined_text,
+                    embedding=embedding_list,
+                    embedding_model='paraphrase-multilingual-MiniLM-L12-v2',
+                    metadata=new_metadata[i] if i < len(new_metadata) else None
+                )
+                
+                # Store Vintern embedding if available
+                if vintern_emb:
+                    document_chunk_service.update_chunk_vintern_embedding(
+                        chunk_id=chunk.id,
+                        vintern_embedding=vintern_emb,
+                        vintern_model=self.vintern_model_name if getattr(self, 'vintern_enabled', False) else None
+                    )
+                
+                # Also add to in-memory cache for fast access
+                self.documents.append(combined_text)
+                self.document_metadata.append(new_metadata[i])
+            
+            # 9. Rebuild embeddings array from database
+            chunks = document_chunk_service.get_chunks_by_document(doc.id)
+            embeddings_list = [vector_to_numpy(chunk.embedding) for chunk in chunks if chunk.embedding]
+            # Filter out None values
+            embeddings_list = [emb for emb in embeddings_list if emb is not None]
+            if embeddings_list:
+                # Append to existing embeddings if they exist
+                if self.embeddings is not None:
+                    self.embeddings = np.vstack([self.embeddings, np.array(embeddings_list)])
+                else:
+                    self.embeddings = np.array(embeddings_list)
 
-            # 5. Nối dữ liệu mới vào "bộ nhớ"
-            self.documents.extend(new_documents)
-            self.document_metadata.extend(new_metadata)
-            if self.embeddings is None:
-                self.embeddings = new_embeddings
-            else:
-                self.embeddings = np.vstack([self.embeddings, new_embeddings])
-
-            # Vintern: tạo embedding cho text chunks
-            if getattr(self, 'vintern_enabled', False) and self.vintern_doc_embeddings is not None and new_documents:
+            # Vintern: Load Vintern embeddings from database into memory cache
+            if getattr(self, 'vintern_enabled', False) and chunks:
                 try:
-                    vintern_text_embs = self.vintern_embed_texts(new_documents)
-                    for idx, emb in enumerate(vintern_text_embs):
-                        self.vintern_doc_embeddings.append(emb)
-                        self.vintern_doc_metadata.append({
-                            'type': 'text',
-                            'source_file': file_name,
-                            'file_type': new_metadata[idx]['file_type'],
-                            'heading': new_metadata[idx]['heading'],
-                            'content': new_documents[idx],
-                            'preview': new_metadata[idx]['preview'],
-                        })
+                    for chunk in chunks:
+                        if chunk.vintern_embedding:
+                            # Convert Vector to numpy array and then to tensor
+                            vintern_array = vector_to_numpy(chunk.vintern_embedding)
+                            if vintern_array is not None:
+                                vintern_tensor = torch.tensor(vintern_array, dtype=torch.float32)
+                                self.vintern_doc_embeddings.append(vintern_tensor)
+                                self.vintern_doc_metadata.append({
+                                    'type': 'text',
+                                    'source_file': file_name,
+                                    'file_type': file_type,
+                                    'heading': chunk.heading or '',
+                                    'content': chunk.content,
+                                    'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
+                                })
                 except Exception as e:
-                    logger.warning(f"Không thể tạo Vintern embeddings cho text: {str(e)}")
+                    logger.warning(f"Không thể tải Vintern embeddings từ database: {str(e)}")
 
             # Vintern: nếu là file ảnh, thêm image embedding
             if getattr(self, 'vintern_enabled', False) and self.is_image_file(file_path):
@@ -340,6 +608,107 @@ class PDFChatbot:
         for i, file_name in enumerate(self.processed_files, 1):
             md_string += f"{i}. {file_name}\n"
         return md_string
+    
+    def delete_document(self, filename: str) -> Tuple[bool, str]:
+        """Delete a document from database and memory."""
+        try:
+            # Check if document exists in database
+            doc = document_service.get_document_by_filename(filename)
+            db_exists = doc is not None
+            memory_exists = filename in self.processed_files
+            
+            if not db_exists and not memory_exists:
+                return False, f"Document '{filename}' not found in database or memory."
+            
+            # Delete from database if it exists there
+            db_deleted = False
+            if db_exists:
+                deleted = document_service.delete_document_by_filename(filename)
+                if not deleted:
+                    return False, f"Failed to delete document '{filename}' from database."
+                db_deleted = True
+                logger.info(f"Deleted document '{filename}' from database")
+            else:
+                logger.warning(f"Document '{filename}' exists only in memory, not in database")
+            
+            # Delete from memory cache
+            indices_to_remove = []
+            for idx, metadata in enumerate(self.document_metadata):
+                if metadata.get('source_file') == filename:
+                    indices_to_remove.append(idx)
+            
+            # Delete in reverse order to maintain indices
+            for idx in reversed(indices_to_remove):
+                del self.document_metadata[idx]
+                del self.documents[idx]
+                
+                # Delete corresponding embedding
+                if self.embeddings is not None and len(self.embeddings) > idx:
+                    self.embeddings = np.delete(self.embeddings, idx, axis=0)
+            
+            # Delete Vintern embeddings
+            vintern_indices_to_remove = []
+            for idx, metadata in enumerate(self.vintern_doc_metadata):
+                if metadata.get('source_file') == filename:
+                    vintern_indices_to_remove.append(idx)
+            
+            for idx in reversed(vintern_indices_to_remove):
+                del self.vintern_doc_metadata[idx]
+                if idx < len(self.vintern_doc_embeddings):
+                    del self.vintern_doc_embeddings[idx]
+            
+            # Remove from processed_files
+            self.processed_files.discard(filename)
+            
+            if db_deleted:
+                logger.info(f"Đã xóa tài liệu '{filename}' từ database và bộ nhớ. Số chunks còn lại: {len(self.documents)}")
+                return True, f"Đã xóa tài liệu '{filename}' từ database và bộ nhớ."
+            else:
+                logger.info(f"Đã xóa tài liệu '{filename}' từ bộ nhớ (không tồn tại trong database). Số chunks còn lại: {len(self.documents)}")
+                return True, f"Đã xóa tài liệu '{filename}' từ bộ nhớ."
+            
+        except Exception as e:
+            error_msg = f"Lỗi khi xóa tài liệu: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
+    def get_documents_list(self) -> List[Dict]:
+        """Trả về danh sách tài liệu đã xử lý với thông tin chi tiết từ database."""
+        try:
+            documents_info = []
+            
+            # Get all documents from database as dictionaries to avoid session issues
+            documents = document_service.get_all_documents_dict()
+            
+            for doc in documents:
+                doc_id = doc['id']
+                
+                # Get chunks for this document
+                chunks = document_chunk_service.get_chunks_by_document(doc_id)
+                
+                # Get the first chunk for preview
+                heading = 'N/A'
+                preview = ''
+                if chunks:
+                    heading = chunks[0].heading or 'N/A'
+                    content_preview = chunks[0].content
+                    preview = content_preview[:150] + "..." if len(content_preview) > 150 else content_preview
+                
+                documents_info.append({
+                    'filename': doc['filename'],
+                    'file_type': doc['file_type'],
+                    'chunks_count': len(chunks),
+                    'heading': heading,
+                    'preview': preview,
+                    'file_size': doc['file_size'],
+                    'created_at': doc['created_at'].isoformat() if doc['created_at'] else None,
+                    'status': doc['processing_status']
+                })
+            
+            return documents_info
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy danh sách tài liệu từ database: {str(e)}")
+            return []
     # <<< END CHANGED
 
     # >>> CHANGED: Cập nhật hàm search để trả về cả metadata
@@ -466,126 +835,3 @@ class PDFChatbot:
             chat_history.append((query, error_msg))
             return "", chat_history, []
     # <<< END CHANGED
-
-def create_interface(chatbot: PDFChatbot):
-    """Tạo giao diện Gradio"""
-    custom_css = """
-    .gradio-container { font-family: 'Arial', sans-serif !important; background: linear-gradient(135deg, #667eea 0%, #764ba2 100%) !important; }
-    .gr-interface { border-radius: 15px !important; box-shadow: 0 8px 32px rgba(0,0,0,0.3) !important; }
-    .gr-panel { background: rgba(255,255,255,0.95) !important; border-radius: 10px !important; backdrop-filter: blur(10px) !important; }
-    .gr-button { background: linear-gradient(45deg, #FF6B6B, #4ECDC4) !important; border: none !important; border-radius: 8px !important; color: white !important; font-weight: bold !important; transition: all 0.3s ease !important; }
-    .gr-button:hover { transform: translateY(-2px) !important; box-shadow: 0 4px 12px rgba(0,0,0,0.2) !important; }
-    .gr-textbox { border-radius: 8px !important; border: 2px solid #e0e0e0 !important; transition: border-color 0.3s ease !important; }
-    .gr-textbox:focus { border-color: #4ECDC4 !important; box-shadow: 0 0 0 3px rgba(78, 205, 196, 0.1) !important; }
-    """
-
-    with gr.Blocks(css=custom_css, title="PDF Chatbot AI", theme=gr.themes.Soft()) as interface:
-        gr.HTML("""<div style="text-align: center; margin-bottom: 30px;"><h1 style="color: #2C3E50; font-size: 2.5em; margin-bottom: 10px;">PDF Chatbot AI </h1><p style="color: #7F8C8D; font-size: 1.2em;">Trò chuyện thông minh với nhiều tài liệu PDF cùng lúc</p></div>""")
-
-        with gr.Row():
-            with gr.Column(scale=1):
-                gr.HTML("<h3 style='color: #34495E;'>1. Tải lên & Xử lý</h3>")
-
-                file_input = gr.File(
-                    label="Chọn file PDF hoặc hình ảnh", 
-                    file_types=[".pdf", ".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".webp"], 
-                    type="filepath"
-                )
-                process_btn = gr.Button("Xử lý & Thêm vào bộ nhớ", variant="primary", size="lg")
-                
-                status_output = gr.Textbox(label="Trạng thái xử lý", lines=5, interactive=False, placeholder="Chờ tải lên file PDF hoặc hình ảnh...")
-                
-                # >>> CHANGED: Thêm khu vực hiển thị các file đã xử lý
-                processed_files_display = gr.Markdown(
-                    label="Các tài liệu đã được xử lý",
-                    value="Chưa có tài liệu nào được xử lý."
-                )
-                
-                clear_memory_btn = gr.Button("Xóa bộ nhớ & Bắt đầu lại", variant="stop")
-                # <<< END CHANGED
-
-            with gr.Column(scale=2):
-                gr.HTML("<h3 style='color: #34495E;'>2. Trò chuyện với tài liệu</h3>")
-                chatbot_interface = gr.Chatbot(label="Cuộc trò chuyện", height=500, show_label=True, elem_id="chatbot")
-                with gr.Row():
-                    query_input = gr.Textbox(label="", placeholder="Nhập câu hỏi của bạn về các tài liệu...", lines=2, scale=4)
-                    send_btn = gr.Button("Gửi", variant="primary", scale=1)
-
-        # Xử lý sự kiện
-        # >>> CHANGED: Cập nhật các sự kiện click
-        process_btn.click(
-            fn=chatbot.process_document,
-            inputs=[file_input],
-            outputs=[status_output, processed_files_display]
-        )
-
-        def generate_answer_wrapper(query, chat_history):
-            _, updated_history, _ = chatbot.generate_answer(query, chat_history)
-            return "", updated_history
-
-        send_btn.click(
-            fn=generate_answer_wrapper,
-            inputs=[query_input, chatbot_interface],
-            outputs=[query_input, chatbot_interface]
-        )
-
-        query_input.submit(
-            fn=generate_answer_wrapper,
-            inputs=[query_input, chatbot_interface],
-            outputs=[query_input, chatbot_interface]
-        )
-        
-        clear_memory_btn.click(
-            fn=chatbot.clear_memory,
-            inputs=[],
-            # Xóa lịch sử chat, câu hỏi, trạng thái, và danh sách file
-            outputs=[chatbot_interface, query_input, status_output, processed_files_display]
-        )
-        # <<< END CHANGED
-
-        gr.HTML("""
-        <div style="margin-top: 30px; padding: 20px; background: rgba(255,255,255,0.1); border-radius: 10px;">
-            <h4 style="color: #2C3E50;">Hướng dẫn sử dụng:</h4>
-            <ol style="color: #34495E;">
-                <li>Tải lên file PDF hoặc hình ảnh (JPG, PNG, BMP, GIF, TIFF, WEBP) ở cột bên trái.</li>
-                <li>Nhấn nút "Xử lý & Thêm vào bộ nhớ" và đợi thông báo thành công.</li>
-                <li>Bạn có thể lặp lại bước 1 và 2 để thêm nhiều tài liệu khác.</li>
-                <li>Đặt câu hỏi về nội dung của TẤT CẢ các tài liệu ở khung chat bên phải.</li>
-                <li>Nếu muốn bắt đầu lại, nhấn "Xóa bộ nhớ & Bắt đầu lại".</li>
-            </ol>
-            <p style="color: #7F8C8D; font-style: italic; margin-top: 10px;">
-                Lưu ý: Hình ảnh sẽ được xử lý bằng AI để trích xuất văn bản. Đảm bảo hình ảnh có độ phân giải tốt và văn bản rõ ràng.
-            </p>
-        </div>
-        """)
-    return interface
-
-def main():
-    """Hàm chính để chạy ứng dụng"""
-    print("Khởi động PDF Chatbot AI...")
-    
-    # Load environment variables from .env file
-    load_dotenv()
-    
-    # Get Google API key from environment variable
-    GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-    
-    if not GOOGLE_API_KEY:
-        print("LỖI: Không tìm thấy GOOGLE_API_KEY trong biến môi trường.")
-        print("Vui lòng:")
-        print("1. Tạo file .env trong thư mục gốc của dự án")
-        print("2. Thêm dòng: GOOGLE_API_KEY=your_api_key_here")
-        print("3. Thay 'your_api_key_here' bằng API key thực của bạn từ https://makersuite.google.com/app/apikey")
-        return
-
-    try:
-        chatbot = PDFChatbot(GOOGLE_API_KEY)
-        interface = create_interface(chatbot)
-        print("Ứng dụng đã sẵn sàng!")
-        print("Mở trình duyệt và truy cập địa chỉ được hiển thị (thường là http://127.0.0.1:7860)")
-        interface.launch(server_name="0.0.0.0", server_port=7860, share=False, show_error=True)
-    except Exception as e:  
-        print(f"Lỗi nghiêm trọng khi khởi động ứng dụng: {str(e)}")
-
-if __name__ == "__main__":
-    main()

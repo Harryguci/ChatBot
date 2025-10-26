@@ -71,8 +71,22 @@ def create_tables(db):
     """
     try:
         logger.info("Creating database tables...")
-        db.create_tables(Base)
-        logger.info("✓ All tables created successfully")
+        
+        # Simply create all tables - if they exist, checkfirst will skip them
+        # If indexes exist, we'll catch the error and continue
+        try:
+            Base.metadata.create_all(bind=db.engine, checkfirst=True)
+            logger.info("✓ All tables created successfully")
+        except SQLAlchemyError as e:
+            # Check if the error is about duplicate indexes
+            if "already exists" in str(e).lower() or "duplicate" in str(e).lower():
+                logger.warning(f"Some database objects already exist: {str(e)}")
+                logger.info("Continuing with verification...")
+                return True
+            else:
+                # Re-raise if it's a different error
+                raise
+        
         return True
     except SQLAlchemyError as e:
         logger.error(f"Failed to create tables: {str(e)}")
@@ -138,10 +152,11 @@ def verify_indexes(db):
     critical_indexes = [
         ('users', 'ix_users_username'),
         ('users', 'ix_users_email'),
-        ('documents', 'ix_documents_content_hash'),
         ('conversations', 'ix_conversations_session_id'),
         ('chatbot_sessions', 'ix_chatbot_sessions_session_id'),
         ('embedding_cache', 'ix_embedding_cache_content_hash'),
+        ('document_chunks', 'ix_document_chunks_embedding_cosine'),
+        ('document_chunks', 'ix_document_chunks_vintern_embedding_cosine'),
     ]
     
     try:
@@ -209,6 +224,7 @@ def initialize_migration():
         # Create extensions
         logger.info("\nCreating PostgreSQL extensions...")
         create_extension_if_not_exists(db, "pgcrypto")
+        create_extension_if_not_exists(db, "vector")  # pgvector for vector similarity search
         
         # Create tables
         logger.info("\nCreating database tables...")
@@ -252,7 +268,9 @@ def rollback_migration():
         logger.warning("=" * 60)
         
         db = get_database_connection()
-        db.drop_tables(Base)
+        # Use checkfirst=True to handle missing tables gracefully
+        with db.engine.connect() as connection:
+            Base.metadata.drop_all(bind=db.engine, checkfirst=True)
         
         logger.info("✓ All tables dropped successfully")
         return True

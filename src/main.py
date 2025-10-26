@@ -1,8 +1,10 @@
 from contextlib import asynccontextmanager
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.requests import Request
+from starlette.status import HTTP_404_NOT_FOUND
 import uvicorn
 import os
 from dotenv import load_dotenv
@@ -71,21 +73,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include chatbot router
-app.include_router(chatbot_router)
-
-# Mount static files from the React app release folder
-app.mount("/assets", StaticFiles(directory="frontend/release/assets"), name="assets")
-
-# Serve static files like vite.svg
-@app.get("/vite.svg")
-async def serve_vite_svg():
-    return FileResponse("frontend/release/vite.svg")
-
-# API endpoints
-@app.get("/api/")
-def read_root():
-    return {"message": "Hello World"}
+# API endpoints - define these first
+# @app.get("/api/")
+# def read_root():
+#     return {"message": "Hello World"}
 
 @app.get("/api/health")
 def health_check():
@@ -105,16 +96,15 @@ def health_check():
             "error": str(e)
         }
 
-# SPA fallback - serve React app for all other routes
-@app.get("/{full_path:path}")
-async def serve_spa(full_path: str):
-    # Check if the file exists in the release folder
-    file_path = f"frontend/release/{full_path}"
-    if os.path.exists(file_path) and os.path.isfile(file_path):
-        return FileResponse(file_path)
-    
-    # For all other routes, serve the React app (SPA fallback)
-    return FileResponse("frontend/release/index.html")
+# Include chatbot router AFTER other API endpoints
+app.include_router(chatbot_router)
+
+# Mount static files from the React app release folder
+# Must be after all API routes
+app.mount("/assets", StaticFiles(directory="frontend/release/assets"), name="assets")
+
+# Mount the root as static to serve HTML files
+app.mount("/", StaticFiles(directory="frontend/release", html=True), name="static")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

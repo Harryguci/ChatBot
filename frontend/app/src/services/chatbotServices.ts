@@ -18,21 +18,6 @@ interface ChatResponse {
   confidence?: number;
   source_files?: string[];
 }
-// Sample response:
-// {
-//   "answer": "<p>Người điều khiển xe chạy quá tốc độ quy định gây tai nạn giao thông sẽ bị phạt tiền từ 6.000.000 đồng đến 8.000.000 đồng (theo file download (5).png). Ngoài ra, nếu chạy quá tốc độ quy định trên 20 km/h thì bị phạt tiền từ 3.000.000 đồng đến 5.000.000 đồng (theo file download (5).png).\n<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: 68.88%*</span> (Cao)</p>",
-//   "chat_history": [
-//     [
-//       "Đi xe vượt quá tốc độ gây tai nạn bị phạt bao nhiêu tiền?",
-//       "<p>Người điều khiển xe chạy quá tốc độ quy định gây tai nạn giao thông sẽ bị phạt tiền từ 6.000.000 đồng đến 8.000.000 đồng (theo file download (5).png). Ngoài ra, nếu chạy quá tốc độ quy định trên 20 km/h thì bị phạt tiền từ 3.000.000 đồng đến 5.000.000 đồng (theo file download (5).png).\n<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: 68.88%*</span> (Cao)</p>"
-//     ]
-//   ],
-//   "confidence": 0.6888,
-//   "source_files": [
-//     "download (5).png",
-//     "download (1).png"
-//   ]
-// }
 
 interface MemoryStatus {
   processed_files: string[];
@@ -48,6 +33,24 @@ interface ClearMemoryResponse {
 interface ChatRequest {
   query: string;
   chat_history?: [string, string][];
+}
+
+interface DocumentInfo {
+  filename: string;
+  file_type: string;
+  chunks_count: number;
+  heading: string;
+  preview: string;
+}
+
+interface DocumentsListResponse {
+  documents: DocumentInfo[];
+  total_documents: number;
+}
+
+interface DeleteDocumentResponse {
+  message: string;
+  status: string;
 }
 
 interface ApiError {
@@ -265,6 +268,52 @@ const chatbotServices = {
     
     return `${Math.round(confidence * 100)}%`;
   },
+
+  /**
+   * Get the list of all processed documents
+   * @returns Promise<DocumentsListResponse>
+   */
+  async getDocuments(): Promise<DocumentsListResponse> {
+    try {
+      const response = await fetch(`${CHATBOT_API_BASE_URL}/memorable-documents`);
+
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+
+      return await response.json();
+    } catch (error) {
+      throw new Error(`Get documents failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  },
+
+  /**
+   * Delete a specific document by filename
+   * @param filename - The filename of the document to delete
+   * @returns Promise<DeleteDocumentResponse>
+   */
+  async deleteDocument(filename: string): Promise<DeleteDocumentResponse> {
+    try {
+      if (!filename.trim()) {
+        throw new Error('Filename cannot be empty');
+      }
+
+      // URL encode the filename to handle special characters
+      const encodedFilename = encodeURIComponent(filename);
+
+      const response = await fetch(`${CHATBOT_API_BASE_URL}/memorable-documents/${encodedFilename}`, {
+        method: 'DELETE',
+      });
+
+      if (!response.ok) {
+        await handleApiError(response);
+      }
+
+      return await response.json();
+    } catch (error) {
+      throw new Error(`Delete document failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+    }
+  },
 };
 
 export default chatbotServices;
@@ -277,5 +326,8 @@ export type {
   MemoryStatus,
   ClearMemoryResponse,
   ChatRequest,
+  DocumentInfo,
+  DocumentsListResponse,
+  DeleteDocumentResponse,
   ApiError,
 };

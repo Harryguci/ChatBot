@@ -74,7 +74,7 @@ class DocumentService(DatabaseService):
     """Service for document-related operations."""
     
     def create_document(self, filename: str, original_filename: str, file_type: str, 
-                       content_hash: str, file_path: Optional[str] = None, 
+                       file_path: Optional[str] = None, 
                        file_size: Optional[int] = None, metadata: Optional[dict] = None) -> Document:
         """Create a new document record."""
         with self.db.get_session() as session:
@@ -84,7 +84,6 @@ class DocumentService(DatabaseService):
                 file_type=file_type,
                 file_path=file_path,
                 file_size=file_size,
-                content_hash=content_hash,
                 extra_metadata=metadata
             )
             session.add(document)
@@ -92,10 +91,12 @@ class DocumentService(DatabaseService):
             session.refresh(document)
             return document
     
-    def get_document_by_hash(self, content_hash: str) -> Optional[Document]:
-        """Get document by content hash."""
+    def check_document_exists_by_filename(self, filename: str, original_filename: str) -> Optional[Document]:
+        """Check if a document with the same filename exists."""
         with self.db.get_session() as session:
-            return session.query(Document).filter(Document.content_hash == content_hash).first()
+            return session.query(Document).filter(
+                (Document.filename == filename) | (Document.original_filename == original_filename)
+            ).first()
     
     def update_document_status(self, document_id: int, status: str) -> bool:
         """Update document processing status."""
@@ -111,6 +112,88 @@ class DocumentService(DatabaseService):
         """Get documents by processing status."""
         with self.db.get_session() as session:
             return session.query(Document).filter(Document.processing_status == status).all()
+    
+    def get_all_documents(self) -> List[Document]:
+        """Get all documents."""
+        with self.db.get_session() as session:
+            return session.query(Document).order_by(desc(Document.created_at)).all()
+    
+    def get_all_processed_documents(self) -> List[Document]:
+        """Get all documents that have been successfully processed (have chunks)."""
+        with self.db.get_session() as session:
+            # Get documents that have at least one chunk
+            documents = session.query(Document).join(
+                DocumentChunk, Document.id == DocumentChunk.document_id
+            ).distinct().order_by(desc(Document.created_at)).all()
+            return documents
+    
+    def get_document_by_filename(self, filename: str) -> Optional[Document]:
+        """Get document by filename."""
+        with self.db.get_session() as session:
+            return session.query(Document).filter(Document.filename == filename).first()
+    
+    def delete_document_without_chunks(self, document_id: int) -> bool:
+        """Delete a document if it has no chunks (incomplete processing)."""
+        with self.db.get_session() as session:
+            document = session.query(Document).filter(Document.id == document_id).first()
+            if document:
+                # Check if it has any chunks
+                chunk_count = session.query(func.count(DocumentChunk.id)).filter(
+                    DocumentChunk.document_id == document_id
+                ).scalar()
+                if chunk_count == 0:
+                    session.delete(document)
+                    session.commit()
+                    return True
+            return False
+    
+    def delete_document_by_filename(self, filename: str) -> bool:
+        """
+        Delete a document and all its chunks from the database.
+        
+        Args:
+            filename: The filename of the document to delete
+            
+        Returns:
+            True if document was deleted, False if not found
+        """
+        with self.db.get_session() as session:
+            document = session.query(Document).filter(Document.filename == filename).first()
+            if document:
+                document_id = document.id
+                # Due to CASCADE, chunks will be automatically deleted
+                session.delete(document)
+                session.commit()
+                logger.info(f"Deleted document {document_id} (filename: {filename}) and all its chunks")
+                return True
+            return False
+    
+    def get_all_pending_documents(self) -> List[Document]:
+        """Get all documents with 'pending' status."""
+        with self.db.get_session() as session:
+            return session.query(Document).filter(
+                Document.processing_status == 'pending'
+            ).all()
+    
+    def get_all_documents_dict(self) -> List[Dict[str, Any]]:
+        """Get all documents as dictionaries to avoid session issues."""
+        with self.db.get_session() as session:
+            documents = session.query(Document).order_by(desc(Document.created_at)).all()
+            return [
+                {
+                    'id': doc.id,
+                    'filename': doc.filename,
+                    'original_filename': doc.original_filename,
+                    'file_type': doc.file_type,
+                    'file_path': doc.file_path,
+                    'file_size': doc.file_size,
+                    'processing_status': doc.processing_status,
+                    'extra_metadata': doc.extra_metadata,
+                    'created_at': doc.created_at,
+                    'updated_at': doc.updated_at
+                }
+                for doc in documents
+            ]
 
 
 class DocumentChunkService(DatabaseService):
@@ -127,7 +210,7 @@ class DocumentChunkService(DatabaseService):
                 heading=heading,
                 content=content,
                 content_length=len(content),
-                embedding=embedding,
+                embedding=embedding,  # Will be stored as Vector type
                 embedding_model=embedding_model,
                 extra_metadata=metadata
             )
@@ -143,12 +226,148 @@ class DocumentChunkService(DatabaseService):
                 DocumentChunk.document_id == document_id
             ).order_by(DocumentChunk.chunk_index).all()
     
+    def get_all_chunks_with_embeddings(self) -> List[DocumentChunk]:
+        """Get all chunks with their embeddings for RAG search."""
+        with self.db.get_session() as session:
+            return session.query(DocumentChunk).filter(
+                DocumentChunk.embedding.isnot(None)
+            ).all()
+    
+    def get_all_chunks_with_vintern_embeddings(self) -> List[DocumentChunk]:
+        """Get all chunks with Vintern embeddings."""
+        with self.db.get_session() as session:
+            return session.query(DocumentChunk).filter(
+                DocumentChunk.vintern_embedding.isnot(None)
+            ).all()
+    
+    def update_chunk_embedding(self, chunk_id: int, embedding: List[float], 
+                              embedding_model: str) -> bool:
+        """Update chunk embedding."""
+        with self.db.get_session() as session:
+            chunk = session.query(DocumentChunk).filter(DocumentChunk.id == chunk_id).first()
+            if chunk:
+                chunk.embedding = embedding
+                chunk.embedding_model = embedding_model
+                session.commit()
+                return True
+            return False
+    
+    def update_chunk_vintern_embedding(self, chunk_id: int, vintern_embedding: List[float],
+                                      vintern_model: str) -> bool:
+        """Update chunk Vintern embedding."""
+        with self.db.get_session() as session:
+            chunk = session.query(DocumentChunk).filter(DocumentChunk.id == chunk_id).first()
+            if chunk:
+                chunk.vintern_embedding = vintern_embedding
+                chunk.vintern_model = vintern_model
+                session.commit()
+                return True
+            return False
+    
     def search_chunks_by_content(self, query: str, limit: int = 10) -> List[DocumentChunk]:
         """Search chunks by content similarity."""
         with self.db.get_session() as session:
             return session.query(DocumentChunk).filter(
                 DocumentChunk.content.ilike(f"%{query}%")
             ).limit(limit).all()
+    
+    def find_similar_chunks_by_embedding(self, query_embedding: List[float], 
+                                        limit: int = 5, threshold: float = 0.7) -> List[Tuple[DocumentChunk, float]]:
+        """
+        Find similar chunks using vector similarity search.
+        
+        Args:
+            query_embedding: Query vector embedding
+            limit: Maximum number of results
+            threshold: Minimum similarity score (0-1)
+            
+        Returns:
+            List of tuples (DocumentChunk, similarity_score)
+        """
+        from sqlalchemy import func, text
+        from pgvector.sqlalchemy import Vector
+        
+        with self.db.get_session() as session:
+            # Use cosine similarity search using pgvector
+            # The <=> operator is cosine distance (lower is more similar)
+            # We convert it to similarity score (higher is more similar)
+            query = text("""
+                SELECT id, document_id, chunk_index, heading, content, content_length,
+                       embedding_model, vintern_model, extra_metadata, created_at,
+                       embedding,
+                       (embedding <=> CAST(:query_vector AS vector)) as distance
+                FROM document_chunks
+                WHERE embedding IS NOT NULL
+                ORDER BY embedding <=> CAST(:query_vector AS vector)
+                LIMIT :limit
+            """)
+            
+            # Convert list to string format for PostgreSQL
+            vector_str = '[' + ','.join(map(str, query_embedding)) + ']'
+            
+            result = session.execute(query, {
+                'query_vector': vector_str,
+                'limit': limit
+            })
+            
+            chunks_with_scores = []
+            for row in result:
+                # Convert distance to similarity score (1 - distance for cosine)
+                similarity = max(0.0, 1.0 - float(row.distance))
+                if similarity >= threshold:
+                    # Get full chunk object
+                    chunk = session.query(DocumentChunk).filter(DocumentChunk.id == row.id).first()
+                    if chunk:
+                        chunks_with_scores.append((chunk, similarity))
+            
+            return chunks_with_scores
+    
+    def find_similar_chunks_by_vintern_embedding(self, query_embedding: List[float], 
+                                                  limit: int = 5, threshold: float = 0.7) -> List[Tuple[DocumentChunk, float]]:
+        """
+        Find similar chunks using Vintern vector similarity search.
+        
+        Args:
+            query_embedding: Query vector embedding
+            limit: Maximum number of results
+            threshold: Minimum similarity score (0-1)
+            
+        Returns:
+            List of tuples (DocumentChunk, similarity_score)
+        """
+        from sqlalchemy import text
+        
+        with self.db.get_session() as session:
+            query = text("""
+                SELECT id, document_id, chunk_index, heading, content, content_length,
+                       embedding_model, vintern_model, extra_metadata, created_at,
+                       vintern_embedding,
+                       (vintern_embedding <=> CAST(:query_vector AS vector)) as distance
+                FROM document_chunks
+                WHERE vintern_embedding IS NOT NULL
+                ORDER BY vintern_embedding <=> CAST(:query_vector AS vector)
+                LIMIT :limit
+            """)
+            
+            # Convert list to string format for PostgreSQL
+            vector_str = '[' + ','.join(map(str, query_embedding)) + ']'
+            
+            result = session.execute(query, {
+                'query_vector': vector_str,
+                'limit': limit
+            })
+            
+            chunks_with_scores = []
+            for row in result:
+                # Convert distance to similarity score
+                similarity = max(0.0, 1.0 - float(row.distance))
+                if similarity >= threshold:
+                    # Get full chunk object
+                    chunk = session.query(DocumentChunk).filter(DocumentChunk.id == row.id).first()
+                    if chunk:
+                        chunks_with_scores.append((chunk, similarity))
+            
+            return chunks_with_scores
 
 
 class ConversationService(DatabaseService):
