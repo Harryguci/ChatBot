@@ -1,22 +1,16 @@
 import os
-import re
-import gradio as gr
-import PyPDF2
 import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import google.generativeai as genai
-from typing import List, Dict, Tuple
+from typing import List, Dict, Tuple, Optional
 import logging
-import json
-from datetime import datetime
 from pathlib import Path
-from dotenv import load_dotenv
 from PIL import Image
-import pytesseract
-import io
 import torch
 from transformers import AutoModel, AutoProcessor
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
 
 # Import database services
 from src.config.db.services import (
@@ -27,6 +21,8 @@ from src.config.db.models import Document, DocumentChunk
 from src.services.base.implements.IngestionService import IngestionService
 from src.services.base.implements.PdfIngestionPipeline import PdfIngestionPipeline
 from src.services.base.implements.ImageIngestionPipeline import ImageIngestionPipeline
+from src.services.base.implements.BaseIngestionPipeline import BaseIngestionPipeline
+from src.services.base.implements.VinternEmbeddingService import VinternEmbeddingService
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
@@ -58,56 +54,98 @@ def vector_to_numpy(embedding) -> np.ndarray:
 
 class Chatbot:
     def __init__(self, google_api_key: str):
-        """Khởi tạo chatbot với API key"""
+        """Khởi tạo chatbot với API key - synchronous initialization"""
         self.google_api_key = google_api_key
+        self._initialization_complete = False
+
+        # Initialize memory structures first
+        self.documents = []
+        self.embeddings = None
+        self.document_metadata = []
+        self.processed_files = set()
+        self.vintern_doc_embeddings: List[torch.Tensor] = []
+        self.vintern_doc_metadata: List[Dict] = []
+
+        # Run synchronous initialization
         self.setup_models()
-        # >>> CHANGED: Khởi tạo các thuộc tính để lưu trữ trạng thái qua nhiều file
-        self.clear_memory()
-        self.load_documents_from_database() # Load documents from DB on startup
-        # <<< END CHANGED
+        self.load_documents_from_database()
+        self._initialization_complete = True
+
+    @classmethod
+    async def create_async(cls, google_api_key: str) -> 'Chatbot':
+        """
+        Factory method for async initialization with concurrent model setup and document loading.
+
+        Usage:
+            chatbot = await Chatbot.create_async(api_key)
+        """
+        logger.info("Starting async chatbot initialization...")
+
+        # Create instance without full initialization
+        instance = cls.__new__(cls)
+        instance.google_api_key = google_api_key
+        instance._initialization_complete = False
+
+        # Initialize memory structures
+        instance.documents = []
+        instance.embeddings = None
+        instance.document_metadata = []
+        instance.processed_files = set()
+        instance.vintern_doc_embeddings = []
+        instance.vintern_doc_metadata = []
+
+        # Run setup_models and load_documents_from_database concurrently
+        try:
+            setup_task = asyncio.create_task(
+                asyncio.to_thread(instance.setup_models)
+            )
+            load_task = asyncio.create_task(
+                asyncio.to_thread(instance.load_documents_from_database)
+            )
+
+            # Wait for both tasks to complete
+            await asyncio.gather(setup_task, load_task)
+
+            instance._initialization_complete = True
+            logger.info("✓ Async chatbot initialization completed successfully")
+
+            return instance
+
+        except Exception as e:
+            logger.error(f"Error during async initialization: {str(e)}")
+            raise
 
     def setup_models(self):
         """Thiết lập các model cần thiết"""
         try:
+            logger.info(f"[setup_models] Starting model initialization...")
             logger.info(f"API Key được sử dụng: {self.google_api_key[:10]}..." if self.google_api_key else "API Key không tồn tại")
             genai.configure(api_key=self.google_api_key)
-            
+
             # Use the working Gemini 2.0 Flash model
             self.llm = genai.GenerativeModel('gemini-2.0-flash-exp')
             logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-exp")
-            
+
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-            logger.info("Đã khởi tạo thành công các model")
+            logger.info("✓ Đã khởi tạo thành công embedding model")
+
+            # Vintern Multimodal Embedding Service (RAG hình ảnh + văn bản)
+            self.vintern_service = VinternEmbeddingService()
+            logger.info("✓ Đã khởi tạo Vintern service")
+
             # Ingestion service + pipelines
             self.ingestion_service = IngestionService()
-            self.pipelines = {
+            self.pipelines: Dict[str, BaseIngestionPipeline] = {
                 '.pdf': PdfIngestionPipeline(self.ingestion_service),
-                'image': ImageIngestionPipeline(self.ingestion_service),
+                'image': ImageIngestionPipeline(self.ingestion_service, self.vintern_service),
             }
-            # Khởi tạo Vintern Multimodal Embedding (RAG hình ảnh + văn bản)
-            try:
-                self.vintern_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-                self.vintern_dtype = torch.bfloat16 if (self.vintern_device == 'cuda' and torch.cuda.is_bf16_supported()) else torch.float32
-                self.vintern_model_name = "5CD-AI/Vintern-Embedding-1B"
-                self.vintern_processor = AutoProcessor.from_pretrained(self.vintern_model_name, trust_remote_code=True)
-                self.vintern_model = AutoModel.from_pretrained(
-                    self.vintern_model_name,
-                    torch_dtype=self.vintern_dtype,
-                    low_cpu_mem_usage=True,
-                    trust_remote_code=True,
-                ).eval().to(self.vintern_device)
-                self.vintern_enabled = True
-                logger.info("✓ Vintern multimodal embeddings đã sẵn sàng (%s, dtype=%s)", self.vintern_device, str(self.vintern_dtype))
-            except Exception as vintern_err:
-                self.vintern_enabled = False
-                self.vintern_processor = None
-                self.vintern_model = None
-                logger.warning("Không thể khởi tạo Vintern embeddings: %s", str(vintern_err))
+            logger.info("✓ Đã khởi tạo ingestion pipelines")
+            logger.info("[setup_models] Model initialization completed")
+
         except Exception as e:
             logger.error(f"Lỗi khởi tạo model: {str(e)}")
             raise
 
-    # >>> CHANGED: Thêm hàm để reset "bộ nhớ" của chatbot
     def clear_memory(self):
         """Xóa tất cả tài liệu, embeddings và lịch sử file đã xử lý."""
         logger.info("Đã xóa bộ nhớ của chatbot.")
@@ -116,8 +154,8 @@ class Chatbot:
         self.document_metadata = []
         self.processed_files = set() # Dùng set để kiểm tra file trùng lặp hiệu quả hơn
         # Bộ nhớ đa phương thức cho Vintern
-        self.vintern_doc_embeddings = []  # List[torch.Tensor]
-        self.vintern_doc_metadata = []    # List[dict]
+        self.vintern_doc_embeddings: List[torch.Tensor] = []
+        self.vintern_doc_metadata: List[Dict] = []
         return (
             [], # Xóa lịch sử chat
             "", # Xóa text box câu hỏi
@@ -128,7 +166,7 @@ class Chatbot:
     def load_documents_from_database(self):
         """Load all documents from database into memory on startup."""
         try:
-            logger.info("Loading documents from database...")
+            logger.info("[load_documents_from_database] Starting document loading from database...")
             documents = document_service.get_all_processed_documents()
             
             if not documents:
@@ -171,7 +209,7 @@ class Chatbot:
                             all_embeddings_list.append(embedding_array)
                 
                 # Load Vintern embeddings if available
-                if getattr(self, 'vintern_enabled', False):
+                if self.vintern_service.is_enabled():
                     try:
                         for chunk in chunks:
                             if chunk.vintern_embedding:
@@ -198,90 +236,14 @@ class Chatbot:
             # Rebuild embeddings array
             if all_embeddings_list:
                 self.embeddings = np.array(all_embeddings_list)
-                logger.info(f"Loaded {len(all_documents)} chunks from {len(documents)} documents")
+                logger.info(f"✓ Loaded {len(all_documents)} chunks from {len(documents)} documents")
             else:
                 logger.warning("No embeddings found in database chunks")
-                
+
+            logger.info("[load_documents_from_database] Document loading completed")
+
         except Exception as e:
             logger.error(f"Error loading documents from database: {str(e)}")
-    # <<< END CHANGED
-
-    def extract_text_from_pdf(self, pdf_path: str) -> str:
-        """Trích xuất text từ file PDF, giữ lại các dấu xuống dòng"""
-        try:
-            text = ""
-            with open(pdf_path, 'rb') as file:
-                pdf_reader = PyPDF2.PdfReader(file)
-                for page in pdf_reader.pages:
-                    page_text = page.extract_text()
-                    if page_text:
-                        text += page_text + "\n"
-            logger.info(f"Đã trích xuất {len(pdf_reader.pages)} trang từ PDF")
-            return text
-        except Exception as e:
-            logger.error(f"Lỗi đọc PDF: {str(e)}")
-            raise
-
-    def clean_text(self, text: str) -> str:
-        """Làm sạch text, loại bỏ các khoảng trắng thừa nhưng giữ lại cấu trúc đoạn văn"""
-        text = re.sub(r' +', ' ', text)
-        text = re.sub(r'\n\s*\n', '\n\n', text)
-        return text.strip()
-
-    def extract_text_from_image(self, image_path: str) -> str:
-        """Trích xuất text từ file hình ảnh sử dụng OCR (Tesseract)"""
-        try:
-            # Mở và xử lý hình ảnh
-            image = Image.open(image_path)
-            
-            # Chuyển đổi sang RGB nếu cần
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            # Sử dụng Tesseract để OCR
-            text = pytesseract.image_to_string(image, lang='vie+eng')
-            
-            logger.info(f"Đã trích xuất text từ hình ảnh: {len(text)} ký tự")
-            return text
-        except Exception as e:
-            logger.error(f"Lỗi trích xuất text từ hình ảnh: {str(e)}")
-            raise
-
-    def extract_text_from_image_with_gemini(self, image_path: str) -> str:
-        """Trích xuất text từ hình ảnh sử dụng Gemini Vision"""
-        try:
-            # Mở hình ảnh
-            image = Image.open(image_path)
-            
-            # Chuyển đổi sang RGB nếu cần
-            if image.mode != 'RGB':
-                image = image.convert('RGB')
-            
-            # Tạo prompt cho Gemini Vision
-            prompt = """
-            Hãy đọc và trích xuất toàn bộ văn bản có trong hình ảnh này. 
-            Bao gồm:
-            1. Tất cả các tiêu đề, tiểu đề
-            2. Nội dung văn bản chính
-            3. Các ghi chú, chú thích
-            4. Số liệu, bảng biểu (nếu có)
-            
-            Giữ nguyên cấu trúc và định dạng của văn bản. Trả về kết quả bằng tiếng Việt.
-            """
-            
-            # Sử dụng Gemini để phân tích hình ảnh
-            response = self.llm.generate_content([prompt, image])
-            extracted_text = response.text
-            
-            logger.info(f"Đã trích xuất text từ hình ảnh bằng Gemini: {len(extracted_text)} ký tự")
-            return extracted_text
-        except Exception as e:
-            logger.error(f"Lỗi trích xuất text từ hình ảnh bằng Gemini: {str(e)}")
-            # Fallback to Tesseract if Gemini fails
-            try:
-                return self.extract_text_from_image(image_path)
-            except:
-                raise Exception(f"Cả hai phương pháp trích xuất đều thất bại: {str(e)}")
 
     def is_image_file(self, file_path: str) -> bool:
         """Kiểm tra xem file có phải là hình ảnh không"""
@@ -289,95 +251,6 @@ class Chatbot:
         file_ext = Path(file_path).suffix.lower()
         return file_ext in image_extensions
 
-    def powerful_chunking_strategy(self, text: str, max_chunk_size: int = 1000, overlap: int = 100) -> List[Dict]:
-        """Chiến lược chunking mạnh mẽ kết hợp phân tích cấu trúc và chia nhỏ đệ quy."""
-        logger.info("Bắt đầu chiến lược chunking nâng cao...")
-        major_sections = re.split(r'\n(?=MỤC LỤC|Phần \d+|Chương \d+|[A-Z\s]{5,}\n|[IVX]+\.\s)', text)
-        all_chunks = []
-        current_heading = "Mở đầu"
-        for section_text in major_sections:
-            if not section_text.strip():
-                continue
-            heading_match = re.match(r'([A-Z\s]{5,}|Phần \d+.*|Chương \d+.*|[IVX]+\..*)\n', section_text)
-            if heading_match:
-                current_heading = heading_match.group(1).strip()
-                content_text = section_text[len(heading_match.group(0)):].strip()
-            else:
-                content_text = section_text.strip()
-            paragraphs = content_text.split('\n\n')
-            current_chunk = ""
-            for p in paragraphs:
-                p = p.strip()
-                if not p:
-                    continue
-                if len(current_chunk) + len(p) + 1 <= max_chunk_size:
-                    current_chunk += "\n" + p
-                else:
-                    if current_chunk.strip():
-                        all_chunks.append({"heading": current_heading, "content": current_chunk.strip()})
-                    current_chunk = p
-            if current_chunk.strip():
-                all_chunks.append({"heading": current_heading, "content": current_chunk.strip()})
-        logger.info(f"Chunking hoàn tất. Tổng số chunks: {len(all_chunks)}")
-        return all_chunks
-
-    def create_embeddings(self, texts: List[str]) -> np.ndarray:
-        """Tạo embeddings cho danh sách các đoạn text"""
-        try:
-            embeddings = self.embedding_model.encode(texts, show_progress_bar=True)
-            logger.info(f"Đã tạo embeddings cho {len(texts)} đoạn text")
-            return embeddings
-        except Exception as e:
-            logger.error(f"Lỗi tạo embeddings: {str(e)}")
-            raise
-
-    def vintern_embed_texts(self, texts: List[str]) -> List[torch.Tensor]:
-        """Create Vintern embeddings for texts."""
-        try:
-            if not self.vintern_enabled:
-                return []
-            
-            batch_docs = self.vintern_processor.process_docs(texts)
-            
-            # Move to device
-            batch_docs["input_ids"] = batch_docs["input_ids"].to(self.vintern_device)
-            batch_docs["attention_mask"] = batch_docs["attention_mask"].to(self.vintern_device)
-            if self.vintern_dtype != torch.float32:
-                batch_docs["attention_mask"] = batch_docs["attention_mask"].to(self.vintern_dtype)
-            
-            with torch.no_grad():
-                embeddings = self.vintern_model(**batch_docs)
-            
-            return list(embeddings)
-        except Exception as e:
-            logger.error(f"Lỗi tạo Vintern embeddings cho text: {str(e)}")
-            return []
-
-    def vintern_embed_images(self, images: List[Image.Image]) -> List[torch.Tensor]:
-        """Create Vintern embeddings for images."""
-        try:
-            if not self.vintern_enabled:
-                return []
-            
-            batch_images = self.vintern_processor.process_images(images)
-            
-            # Move to device
-            batch_images["pixel_values"] = batch_images["pixel_values"].to(self.vintern_device)
-            batch_images["input_ids"] = batch_images["input_ids"].to(self.vintern_device)
-            batch_images["attention_mask"] = batch_images["attention_mask"].to(self.vintern_device)
-            if self.vintern_dtype != torch.float32:
-                batch_images["attention_mask"] = batch_images["attention_mask"].to(self.vintern_dtype)
-                batch_images["pixel_values"] = batch_images["pixel_values"].to(self.vintern_dtype)
-            
-            with torch.no_grad():
-                embeddings = self.vintern_model(**batch_images)
-            
-            return list(embeddings)
-        except Exception as e:
-            logger.error(f"Lỗi tạo Vintern embeddings cho ảnh: {str(e)}")
-            return []
-
-    # >>> CHANGED: Cập nhật hàm xử lý để dùng ingestion pipelines cho PDF & hình ảnh
     def process_document(self, file_path: str, original_filename: str = None) -> Tuple[str, str]:
         """Xử lý tài liệu bằng ingestion pipelines và nạp vào bộ nhớ từ DB."""
         try:
@@ -450,20 +323,20 @@ class Chatbot:
             loaded_after = self._load_document_into_memory(doc.id, desired_filename, file_type)
 
             # Vintern: bổ sung embedding nếu khả dụng cho text (single chunk) và ảnh
-            if getattr(self, 'vintern_enabled', False):
+            if self.vintern_service.is_enabled():
                 try:
                     chunks = document_chunk_service.get_chunks_by_document(doc.id)
                     if chunks:
                         # Text embeddings for the chunk content
                         texts = [c.content for c in chunks]
-                        vintern_text_embs = self.vintern_embed_texts(texts)
+                        vintern_text_embs = self.vintern_service.embed_texts(texts)
                         for idx, c in enumerate(chunks):
                             if idx < len(vintern_text_embs) and torch.is_tensor(vintern_text_embs[idx]):
                                 ve = vintern_text_embs[idx].cpu().numpy().tolist()
                                 document_chunk_service.update_chunk_vintern_embedding(
                                     chunk_id=c.id,
                                     vintern_embedding=ve,
-                                    vintern_model=self.vintern_model_name,
+                                    vintern_model=self.vintern_service.get_model_name(),
                                 )
                                 # update in-memory caches too
                                 self.vintern_doc_embeddings.append(vintern_text_embs[idx])
@@ -482,7 +355,7 @@ class Chatbot:
                             img = Image.open(pipeline_path)
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
-                            img_embs = self.vintern_embed_images([img])
+                            img_embs = self.vintern_service.embed_images([img])
                             if img_embs:
                                 self.vintern_doc_embeddings.append(img_embs[0])
                                 # Use the first chunk (or nothing) for preview content
@@ -552,11 +425,6 @@ class Chatbot:
             if meta.get('chunk_id') == chunk_id:
                 return meta.get('source_file') or 'unknown'
         return 'unknown'
-
-    # Giữ lại method cũ để tương thích ngược
-    def process_pdf(self, pdf_path: str) -> Tuple[str, str]:
-        """Wrapper method để tương thích ngược với code cũ"""
-        return self.process_document(pdf_path)
 
     def _get_processed_files_markdown(self) -> str:
         """Tạo chuỗi markdown hiển thị danh sách các file đã xử lý."""
@@ -668,9 +536,7 @@ class Chatbot:
         except Exception as e:
             logger.error(f"Lỗi khi lấy danh sách tài liệu từ database: {str(e)}")
             return []
-    # <<< END CHANGED
 
-    # >>> CHANGED: Cập nhật hàm search để trả về cả metadata
     def search_relevant_documents(self, query: str, top_k: int = 5) -> List[Tuple[str, float, dict]]:
         """Tìm kiếm các đoạn văn liên quan, trả về cả metadata."""
         try:
@@ -689,27 +555,23 @@ class Chatbot:
         except Exception as e:
             logger.error(f"Lỗi tìm kiếm: {str(e)}")
             return []
-    # <<< END CHANGED
 
-    # >>> NEW: Tìm kiếm đa phương thức bằng Vintern
     def search_relevant_documents_vintern(self, query: str, top_k: int = 5) -> List[Tuple[str, float, dict]]:
         """Tìm kiếm đa phương thức bằng Vintern; trả về (context_text, score, metadata)."""
         try:
-            if not getattr(self, 'vintern_enabled', False) or not self.vintern_doc_embeddings:
+            if not self.vintern_service.is_enabled() or not self.vintern_doc_embeddings:
                 return []
+
             # Chuẩn bị embedding cho query
-            batch = self.vintern_processor.process_queries([query])
-            # Move to device/dtype
-            if 'input_ids' in batch:
-                batch['input_ids'] = batch['input_ids'].to(self.vintern_device)
-            if 'attention_mask' in batch:
-                am = batch['attention_mask'].to(self.vintern_device)
-                if self.vintern_dtype != torch.float32:
-                    am = am.to(self.vintern_dtype)
-                batch['attention_mask'] = am
-            with torch.no_grad():
-                q_emb = self.vintern_model(**batch)
-            scores = self.vintern_processor.score_multi_vector(q_emb, self.vintern_doc_embeddings)[0]
+            q_emb = self.vintern_service.process_query(query)
+            if q_emb is None:
+                return []
+
+            # Score documents against query
+            scores = self.vintern_service.score_multi_vector(q_emb, self.vintern_doc_embeddings)
+            if scores is None:
+                return []
+
             top_indices = scores.argsort(descending=True)[:top_k]
 
             results: List[Tuple[str, float, dict]] = []
@@ -722,13 +584,11 @@ class Chatbot:
         except Exception as e:
             logger.error(f"Lỗi tìm kiếm Vintern: {str(e)}")
             return []
-    # <<< END NEW
 
-    # >>> CHANGED: Cập nhật hàm generate_answer để hợp nhất bằng Vintern + text
     def generate_answer(self, query: str, chat_history: List) -> Tuple[str, List, List[str]]:
         """Tạo câu trả lời dựa trên tài liệu và lịch sử chat"""
         try:
-            vintern_results = self.search_relevant_documents_vintern(query, top_k=5) if getattr(self, 'vintern_enabled', False) else []
+            vintern_results = self.search_relevant_documents_vintern(query, top_k=5) if self.vintern_service.is_enabled() else []
             text_results = self.search_relevant_documents(query, top_k=5) if self.documents else []
 
             combined = vintern_results + text_results
@@ -811,4 +671,3 @@ class Chatbot:
             logger.error(error_msg)
             chat_history.append((query, error_msg))
             return "", chat_history, []
-    # <<< END CHANGED

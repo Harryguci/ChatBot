@@ -6,6 +6,7 @@ import os
 import tempfile
 import logging
 from pathlib import Path
+import asyncio
 
 # Import the PDFChatbot class
 from ..chatbot_memory import Chatbot
@@ -19,6 +20,7 @@ router = APIRouter(prefix="/api/chatbot", tags=["chatbot"])
 
 # Global chatbot instance
 chatbot_instance: Optional[Chatbot] = None
+chatbot_lock = asyncio.Lock()
 
 # Pydantic models for request/response
 class ChatRequest(BaseModel):
@@ -56,22 +58,29 @@ class DocumentsListResponse(BaseModel):
     documents: List[DocumentInfo]
     total_documents: int
 
-# Dependency to get chatbot instance
-def get_chatbot() -> Chatbot:
+# Dependency to get chatbot instance with async initialization
+async def get_chatbot() -> Chatbot:
     global chatbot_instance
-    if chatbot_instance is None:
-        # Get API key from environment variable
-        google_api_key = os.getenv("GOOGLE_API_KEY")
-        if not google_api_key:
-            raise HTTPException(
-                status_code=500, 
-                detail="Google API key not found. Please set GOOGLE_API_KEY environment variable."
-            )
-        try:
-            chatbot_instance = Chatbot(google_api_key)
-        except Exception as e:
-            logger.error(f"Failed to initialize chatbot: {str(e)}")
-            raise HTTPException(status_code=500, detail=f"Failed to initialize chatbot: {str(e)}")
+
+    # Use lock to prevent multiple concurrent initializations
+    async with chatbot_lock:
+        if chatbot_instance is None:
+            # Get API key from environment variable
+            google_api_key = os.getenv("GOOGLE_API_KEY")
+            if not google_api_key:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Google API key not found. Please set GOOGLE_API_KEY environment variable."
+                )
+            try:
+                logger.info("Initializing chatbot with async pattern...")
+                # Use async initialization for better performance
+                chatbot_instance = await Chatbot.create_async(google_api_key)
+                logger.info("✓ Chatbot initialized successfully")
+            except Exception as e:
+                logger.error(f"Failed to initialize chatbot: {str(e)}")
+                raise HTTPException(status_code=500, detail=f"Failed to initialize chatbot: {str(e)}")
+
     return chatbot_instance
 
 @router.post("/upload-document", response_model=ProcessPDFResponse)
@@ -248,8 +257,9 @@ async def get_memory_status(chatbot: Chatbot = Depends(get_chatbot)):
         total_chunks = len(chatbot.documents)
         total_documents = len(chatbot.document_metadata)
 
-        vintern_enabled = getattr(chatbot, 'vintern_enabled', False)
-        vintern_meta = getattr(chatbot, 'vintern_doc_metadata', []) if vintern_enabled else []
+        # Use vintern_service instead of vintern_enabled
+        vintern_enabled = chatbot.vintern_service.is_enabled()
+        vintern_meta = chatbot.vintern_doc_metadata if vintern_enabled else []
         vintern_documents = len(vintern_meta)
         vintern_text_documents = sum(1 for m in vintern_meta if m.get('type') == 'text') if vintern_meta else 0
         vintern_image_documents = sum(1 for m in vintern_meta if m.get('type') == 'image') if vintern_meta else 0

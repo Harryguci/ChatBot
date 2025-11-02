@@ -1,4 +1,4 @@
-from typing import Any, Dict, Tuple
+from typing import Any, Dict, Tuple, Optional
 from pathlib import Path
 import os
 import logging
@@ -7,10 +7,10 @@ import numpy as np
 from sentence_transformers import SentenceTransformer
 from PIL import Image
 import torch
-from transformers import AutoModel, AutoProcessor
 
 from src.services.base.implements.BaseIngestionPipeline import BaseIngestionPipeline
 from src.services.base.interfaces.IIngestionService import IIngestionService
+from src.services.base.interfaces.IVinternEmbeddingService import IVinternEmbeddingService
 from src.config.db.services import (
     document_service,
     document_chunk_service,
@@ -28,35 +28,21 @@ class ImageIngestionPipeline(BaseIngestionPipeline):
     - Store: create document + single chunk with embedding
     """
 
-    def __init__(self, ingestion_service: IIngestionService, embedding_model_name: str = 'paraphrase-multilingual-MiniLM-L12-v2'):
+    def __init__(
+        self,
+        ingestion_service: IIngestionService,
+        vintern_service: Optional[IVinternEmbeddingService] = None,
+        embedding_model_name: str = 'paraphrase-multilingual-MiniLM-L12-v2'
+    ):
         super().__init__(ingestion_service)
         self._embedding_model_name = embedding_model_name
+        self._vintern_service = vintern_service
+
         try:
             self._embedder = SentenceTransformer(self._embedding_model_name)
         except Exception as e:
             logger.warning("Failed to initialize SentenceTransformer '%s': %s", self._embedding_model_name, str(e))
             self._embedder = None
-
-        # Initialize Vintern (optional)
-        self._vintern_enabled = False
-        self._vintern_model_name = "5CD-AI/Vintern-Embedding-1B"
-        self._vintern_device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        self._vintern_dtype = torch.bfloat16 if (self._vintern_device == 'cuda' and torch.cuda.is_bf16_supported()) else torch.float32
-        try:
-            self._vintern_processor = AutoProcessor.from_pretrained(self._vintern_model_name, trust_remote_code=True)
-            self._vintern_model = AutoModel.from_pretrained(
-                self._vintern_model_name,
-                torch_dtype=self._vintern_dtype,
-                low_cpu_mem_usage=True,
-                trust_remote_code=True,
-            ).eval().to(self._vintern_device)
-            self._vintern_enabled = True
-            logger.info("Vintern enabled in ImageIngestionPipeline (%s, dtype=%s)", self._vintern_device, str(self._vintern_dtype))
-        except Exception as e:
-            # Non-fatal; image ingestion will still proceed with text embedding only
-            self._vintern_processor = None
-            self._vintern_model = None
-            logger.warning("Vintern unavailable in ImageIngestionPipeline: %s", str(e))
 
     def embed(self, content: str, file_path: str) -> Tuple[np.ndarray, Dict[str, Any]]:
         if not content or not content.strip():
@@ -124,37 +110,22 @@ class ImageIngestionPipeline(BaseIngestionPipeline):
             pass
 
         # Optionally add Vintern multimodal embedding for the image
-        if self._vintern_enabled:
+        if self._vintern_service and self._vintern_service.is_enabled():
             try:
                 img = Image.open(file_path)
                 if img.mode != 'RGB':
                     img = img.convert('RGB')
-                batch = self._vintern_processor.process_images([img])
-                batch["pixel_values"] = batch["pixel_values"].to(self._vintern_device)
-                # Some processors include text tokens; move if present
-                if "input_ids" in batch:
-                    batch["input_ids"] = batch["input_ids"].to(self._vintern_device)
-                if "attention_mask" in batch:
-                    am = batch["attention_mask"].to(self._vintern_device)
-                    if self._vintern_dtype != torch.float32:
-                        am = am.to(self._vintern_dtype)
-                    batch["attention_mask"] = am
-                if self._vintern_dtype != torch.float32 and "pixel_values" in batch:
-                    batch["pixel_values"] = batch["pixel_values"].to(self._vintern_dtype)
- 
-                with torch.no_grad():
-                    vintern_embs = self._vintern_model(**batch)
-                if isinstance(vintern_embs, (list, tuple)) and len(vintern_embs) > 0:
+
+                vintern_embs = self._vintern_service.embed_images([img])
+                if vintern_embs and len(vintern_embs) > 0:
                     vec = vintern_embs[0]
-                else:
-                    vec = vintern_embs
-                if torch.is_tensor(vec):
-                    ve_list = vec.detach().cpu().numpy().tolist()
-                    document_chunk_service.update_chunk_vintern_embedding(
-                        chunk_id=chunk.id,
-                        vintern_embedding=ve_list,
-                        vintern_model=self._vintern_model_name,
-                    )
+                    if torch.is_tensor(vec):
+                        ve_list = vec.detach().cpu().numpy().tolist()
+                        document_chunk_service.update_chunk_vintern_embedding(
+                            chunk_id=chunk.id,
+                            vintern_embedding=ve_list,
+                            vintern_model=self._vintern_service.get_model_name(),
+                        )
             except Exception as e:
                 logger.warning("Failed to compute Vintern embedding for image '%s': %s", filename, str(e))
 
