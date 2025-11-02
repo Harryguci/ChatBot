@@ -135,7 +135,12 @@ class DocumentService(DatabaseService):
         """Get document by filename."""
         with self.db.get_session() as session:
             return session.query(Document).filter(Document.filename == filename).first()
-    
+
+    def get_document_by_id(self, document_id: int) -> Optional[Document]:
+        """Get document by ID."""
+        with self.db.get_session() as session:
+            return session.query(Document).filter(Document.id == document_id).first()
+
     def delete_document_without_chunks(self, document_id: int) -> bool:
         """Delete a document if it has no chunks (incomplete processing)."""
         with self.db.get_session() as session:
@@ -277,6 +282,11 @@ class DocumentChunkService(DatabaseService):
                 return True
             return False
     
+    def get_chunk_by_id(self, chunk_id: int) -> Optional[DocumentChunk]:
+        """Get a specific chunk by ID."""
+        with self.db.get_session() as session:
+            return session.query(DocumentChunk).filter(DocumentChunk.id == chunk_id).first()
+
     def search_chunks_by_content(self, query: str, limit: int = 10) -> List[DocumentChunk]:
         """Search chunks by content similarity."""
         with self.db.get_session() as session:
@@ -284,102 +294,165 @@ class DocumentChunkService(DatabaseService):
                 DocumentChunk.content.ilike(f"%{query}%")
             ).limit(limit).all()
     
-    def find_similar_chunks_by_embedding(self, query_embedding: List[float], 
-                                        limit: int = 5, threshold: float = 0.7) -> List[Tuple[DocumentChunk, float]]:
+    def find_similar_chunks_by_embedding(self, query_embedding: List[float],
+                                        limit: int = 5, threshold: float = 0.7,
+                                        recency_weight: float = 0.15) -> List[Tuple[DocumentChunk, float]]:
         """
-        Find similar chunks using vector similarity search.
-        
+        Find similar chunks using vector similarity search with recency boost.
+
+        Newer embeddings are trusted more by applying a recency boost to the similarity score.
+        The final score is: similarity * (1 - recency_weight) + recency_score * recency_weight
+
         Args:
             query_embedding: Query vector embedding
             limit: Maximum number of results
             threshold: Minimum similarity score (0-1)
-            
+            recency_weight: Weight for recency boost (0-1), default 0.15 (15% weight to recency)
+
         Returns:
             List of tuples (DocumentChunk, similarity_score)
         """
         from sqlalchemy import func, text
         from pgvector.sqlalchemy import Vector
-        
+
         with self.db.get_session() as session:
-            # Use cosine similarity search using pgvector
-            # The <=> operator is cosine distance (lower is more similar)
-            # We convert it to similarity score (higher is more similar)
+            # Use cosine similarity search with recency boost
+            # Recency score: exponential decay from most recent (1.0) to oldest (0.0)
+            # Final score combines similarity and recency
             query = text("""
+                WITH chunk_stats AS (
+                    SELECT
+                        id, document_id, chunk_index, heading, content, content_length,
+                        embedding_model, vintern_model, extra_metadata, created_at,
+                        embedding,
+                        (embedding <=> CAST(:query_vector AS vector)) as distance,
+                        EXTRACT(EPOCH FROM (NOW() - created_at)) as age_seconds,
+                        EXTRACT(EPOCH FROM (NOW() - MIN(created_at) OVER ())) as max_age_seconds
+                    FROM document_chunks
+                    WHERE embedding IS NOT NULL
+                ),
+                scored_chunks AS (
+                    SELECT *,
+                        (1.0 - distance) as similarity,
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END as recency_score,
+                        (1.0 - distance) * (1.0 - :recency_weight) +
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END * :recency_weight as final_score
+                    FROM chunk_stats
+                )
                 SELECT id, document_id, chunk_index, heading, content, content_length,
                        embedding_model, vintern_model, extra_metadata, created_at,
-                       embedding,
-                       (embedding <=> CAST(:query_vector AS vector)) as distance
-                FROM document_chunks
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> CAST(:query_vector AS vector)
+                       embedding, distance, similarity, recency_score, final_score
+                FROM scored_chunks
+                ORDER BY final_score DESC
                 LIMIT :limit
             """)
-            
+
             # Convert list to string format for PostgreSQL
             vector_str = '[' + ','.join(map(str, query_embedding)) + ']'
-            
+
             result = session.execute(query, {
                 'query_vector': vector_str,
-                'limit': limit
+                'limit': limit,
+                'recency_weight': recency_weight
             })
-            
+
             chunks_with_scores = []
             for row in result:
-                # Convert distance to similarity score (1 - distance for cosine)
-                similarity = max(0.0, 1.0 - float(row.distance))
+                # Use the final boosted score
+                similarity = max(0.0, float(row.final_score))
                 if similarity >= threshold:
                     # Get full chunk object
                     chunk = session.query(DocumentChunk).filter(DocumentChunk.id == row.id).first()
                     if chunk:
                         chunks_with_scores.append((chunk, similarity))
-            
+
             return chunks_with_scores
     
-    def find_similar_chunks_by_vintern_embedding(self, query_embedding: List[float], 
-                                                  limit: int = 5, threshold: float = 0.7) -> List[Tuple[DocumentChunk, float]]:
+    def find_similar_chunks_by_vintern_embedding(self, query_embedding: List[float],
+                                                  limit: int = 5, threshold: float = 0.7,
+                                                  recency_weight: float = 0.15) -> List[Tuple[DocumentChunk, float]]:
         """
-        Find similar chunks using Vintern vector similarity search.
-        
+        Find similar chunks using Vintern vector similarity search with recency boost.
+
+        Newer embeddings are trusted more by applying a recency boost to the similarity score.
+        The final score is: similarity * (1 - recency_weight) + recency_score * recency_weight
+
         Args:
             query_embedding: Query vector embedding
             limit: Maximum number of results
             threshold: Minimum similarity score (0-1)
-            
+            recency_weight: Weight for recency boost (0-1), default 0.15 (15% weight to recency)
+
         Returns:
             List of tuples (DocumentChunk, similarity_score)
         """
         from sqlalchemy import text
-        
+
         with self.db.get_session() as session:
+            # Use cosine similarity search with recency boost
             query = text("""
+                WITH chunk_stats AS (
+                    SELECT
+                        id, document_id, chunk_index, heading, content, content_length,
+                        embedding_model, vintern_model, extra_metadata, created_at,
+                        vintern_embedding,
+                        (vintern_embedding <=> CAST(:query_vector AS vector)) as distance,
+                        EXTRACT(EPOCH FROM (NOW() - created_at)) as age_seconds,
+                        EXTRACT(EPOCH FROM (NOW() - MIN(created_at) OVER ())) as max_age_seconds
+                    FROM document_chunks
+                    WHERE vintern_embedding IS NOT NULL
+                ),
+                scored_chunks AS (
+                    SELECT *,
+                        (1.0 - distance) as similarity,
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END as recency_score,
+                        (1.0 - distance) * (1.0 - :recency_weight) +
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END * :recency_weight as final_score
+                    FROM chunk_stats
+                )
                 SELECT id, document_id, chunk_index, heading, content, content_length,
                        embedding_model, vintern_model, extra_metadata, created_at,
-                       vintern_embedding,
-                       (vintern_embedding <=> CAST(:query_vector AS vector)) as distance
-                FROM document_chunks
-                WHERE vintern_embedding IS NOT NULL
-                ORDER BY vintern_embedding <=> CAST(:query_vector AS vector)
+                       vintern_embedding, distance, similarity, recency_score, final_score
+                FROM scored_chunks
+                ORDER BY final_score DESC
                 LIMIT :limit
             """)
-            
+
             # Convert list to string format for PostgreSQL
             vector_str = '[' + ','.join(map(str, query_embedding)) + ']'
-            
+
             result = session.execute(query, {
                 'query_vector': vector_str,
-                'limit': limit
+                'limit': limit,
+                'recency_weight': recency_weight
             })
-            
+
             chunks_with_scores = []
             for row in result:
-                # Convert distance to similarity score
-                similarity = max(0.0, 1.0 - float(row.distance))
+                # Use the final boosted score
+                similarity = max(0.0, float(row.final_score))
                 if similarity >= threshold:
                     # Get full chunk object
                     chunk = session.query(DocumentChunk).filter(DocumentChunk.id == row.id).first()
                     if chunk:
                         chunks_with_scores.append((chunk, similarity))
-            
+
             return chunks_with_scores
 
 

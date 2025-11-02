@@ -157,117 +157,60 @@ class Chatbot:
             raise
 
     def clear_memory(self):
-        """Xóa tất cả tài liệu, embeddings và lịch sử file đã xử lý."""
-        logger.info("Đã xóa bộ nhớ của chatbot.")
+        """
+        Xóa tất cả tài liệu từ database và reset tracking.
+
+        Note: This clears the database, not just in-memory structures.
+        """
+        logger.info("Clearing all documents from database and tracker...")
+
+        # Clear all documents from database
+        try:
+            all_docs = document_service.get_all_processed_documents()
+            for doc in all_docs:
+                document_service.delete_document_by_filename(doc.filename)
+            logger.info(f"Deleted {len(all_docs)} documents from database")
+        except Exception as e:
+            logger.error(f"Error clearing database: {str(e)}")
+
+        # Clear tracking structures
         self.documents = []
-        self.embeddings = None # Sẽ là một numpy array
+        self.embeddings = None
         self.document_metadata = []
-        self.processed_files = set() # Dùng set để kiểm tra file trùng lặp hiệu quả hơn
-        # Bộ nhớ đa phương thức cho Vintern
+        self.processed_files = set()
         self.vintern_doc_embeddings: List[torch.Tensor] = []
         self.vintern_doc_metadata: List[Dict] = []
+
+        logger.info("Chatbot memory and database cleared")
         return (
-            [], # Xóa lịch sử chat
-            "", # Xóa text box câu hỏi
-            "Sẵn sàng xử lý file mới...", # Reset status
-            "Chưa có tài liệu nào được xử lý." # Reset danh sách file
+            [],  # Xóa lịch sử chat
+            "",  # Xóa text box câu hỏi
+            "Sẵn sàng xử lý file mới...",  # Reset status
+            "Chưa có tài liệu nào được xử lý."  # Reset danh sách file
         )
     
     def load_documents_from_database(self):
-        """Load all documents from database into memory on startup."""
+        """
+        Load document metadata from database on startup.
+
+        Note: Embeddings are no longer loaded into memory. Instead, similarity searches
+        are performed directly against the database using the new recency-weighted queries.
+        """
         try:
-            logger.info("[load_documents_from_database] Starting document loading from database...")
+            logger.info("[load_documents_from_database] Loading document metadata from database...")
             documents = document_service.get_all_processed_documents()
-            
+
             if not documents:
                 logger.info("No documents found in database.")
                 return
-            
-            all_embeddings_list = []
-            all_documents = []
-            all_metadata = []
-            
+
+            # Only load filenames into processed_files for tracking
             for doc in documents:
-                logger.info(f"Loading document: {doc.filename} (ID: {doc.id})")
-                
-                # Get chunks for this document
-                chunks = document_chunk_service.get_chunks_by_document(doc.id)
-                
-                if not chunks:
-                    logger.warning(f"No chunks found for document {doc.filename}")
-                    continue
-                
-                # Add filename to processed_files
                 self.processed_files.add(doc.filename)
-                
-                # Load chunks into memory
-                for chunk in chunks:
-                    all_documents.append(chunk.content)
-                    all_metadata.append({
-                        'chunk_id': chunk.id,
-                        'source_file': doc.filename,
-                        'file_type': doc.file_type,
-                        'heading': chunk.heading or '',
-                        'length': len(chunk.content),
-                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content
-                    })
+                logger.debug(f"Registered document: {doc.filename} (ID: {doc.id})")
 
-                    # Collect embeddings with detailed logging
-                    if chunk.embedding is not None:
-                        logger.debug(f"  Chunk {chunk.id}: embedding exists, type={type(chunk.embedding).__name__}")
-                        try:
-                            embedding_array = vector_to_numpy(chunk.embedding)
-                            if embedding_array is not None:
-                                all_embeddings_list.append(embedding_array)
-                                logger.debug(f"    ✓ Converted to numpy: shape={embedding_array.shape}")
-                            else:
-                                logger.warning(f"    ✗ vector_to_numpy returned None for chunk {chunk.id}")
-                        except Exception as e:
-                            logger.error(f"    ✗ Error converting embedding for chunk {chunk.id}: {str(e)}")
-                    else:
-                        logger.warning(f"  Chunk {chunk.id}: No embedding found")
-                
-                # Load Vintern embeddings if available
-                if self.vintern_service.is_enabled():
-                    try:
-                        for chunk in chunks:
-                            if chunk.vintern_embedding:
-                                # Convert Vector to numpy array and then to tensor
-                                vintern_array = vector_to_numpy(chunk.vintern_embedding)
-                                if vintern_array is not None:
-                                    vintern_tensor = torch.tensor(vintern_array, dtype=torch.float32)
-                                    self.vintern_doc_embeddings.append(vintern_tensor)
-                                    self.vintern_doc_metadata.append({
-                                        'type': 'text',
-                                        'source_file': doc.filename,
-                                        'file_type': doc.file_type,
-                                        'heading': chunk.heading or '',
-                                        'content': chunk.content,
-                                        'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
-                                    })
-                    except Exception as e:
-                        logger.warning(f"Error loading Vintern embeddings from database: {str(e)}")
-            
-            # Set documents and metadata
-            self.documents = all_documents
-            self.document_metadata = all_metadata
-            
-            # Rebuild embeddings array
-            logger.info(f"Collected {len(all_embeddings_list)} embeddings from {len(all_documents)} chunks")
-
-            if all_embeddings_list:
-                self.embeddings = np.array(all_embeddings_list)
-                logger.info(f"✓ Loaded {len(all_documents)} chunks from {len(documents)} documents")
-                logger.info(f"✓ Embeddings matrix shape: {self.embeddings.shape}")
-            else:
-                logger.warning("⚠ No embeddings found in database chunks - Chatbot.embeddings will be None")
-                logger.warning("  This means text-based search will not work!")
-                logger.warning("  Possible causes:")
-                logger.warning("    1. Documents were processed without generating embeddings")
-                logger.warning("    2. Database migration issue")
-                logger.warning("    3. Embeddings were not saved properly")
-
-            logger.info("[load_documents_from_database] Document loading completed")
+            logger.info(f"✓ Loaded metadata for {len(documents)} documents")
+            logger.info("[load_documents_from_database] Document metadata loading completed")
 
         except Exception as e:
             logger.error(f"Error loading documents from database: {str(e)}")
@@ -403,11 +346,14 @@ class Chatbot:
             if loaded_after > 0:
                 self.processed_files.add(desired_filename)
 
-            total_chunks = len(self.documents)
+            # Get total chunks from database
+            all_documents = document_service.get_all_processed_documents()
+            total_chunks = sum(len(document_chunk_service.get_chunks_by_document(d.id)) for d in all_documents)
+
             status_message = (
                 f"Xử lý thành công '{desired_filename}' ({file_type})!\n"
                 f"- Số chunks mới: {len(document_chunk_service.get_chunks_by_document(doc.id))}\n"
-                f"- Tổng số chunks trong bộ nhớ: {total_chunks:,}"
+                f"- Tổng số chunks trong database: {total_chunks:,}"
             )
             return status_message, self._get_processed_files_markdown()
 
@@ -417,40 +363,35 @@ class Chatbot:
             return error_msg, self._get_processed_files_markdown()
 
     def _load_document_into_memory(self, document_id: int, filename: str, file_type: str) -> int:
-        """Load a document's chunks + embeddings from DB into in-memory caches.
-        Returns the number of chunks loaded."""
+        """
+        Register a document in the processed files tracker.
+
+        Note: This method no longer loads chunks or embeddings into memory.
+        Similarity searches are performed directly against the database.
+
+        Returns the number of chunks in the document.
+        """
         chunks = document_chunk_service.get_chunks_by_document(document_id)
         if not chunks:
             logger.warning("No chunks found when loading document '%s'", filename)
             return 0
 
-        # Append documents and metadata
-        for chunk in chunks:
-            self.documents.append(chunk.content)
-            self.document_metadata.append({
-                'chunk_id': chunk.id,
-                'source_file': filename,
-                'file_type': file_type,
-                'heading': chunk.heading or '',
-                'length': len(chunk.content),
-                'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
-            })
+        # Just track that we've processed this file
+        self.processed_files.add(filename)
+        logger.info(f"Registered document '{filename}' with {len(chunks)} chunks")
 
-        # Rebuild/append embeddings matrix
-        embeddings_list = [vector_to_numpy(chunk.embedding) for chunk in chunks if chunk.embedding]
-        embeddings_list = [emb for emb in embeddings_list if emb is not None]
-        if embeddings_list:
-            if self.embeddings is not None:
-                self.embeddings = np.vstack([self.embeddings, np.array(embeddings_list)])
-            else:
-                self.embeddings = np.array(embeddings_list)
         return len(chunks)
 
     def _find_filename_for_chunk(self, chunk_id: int) -> str:
-        """Best-effort resolve filename for a given chunk id from in-memory metadata."""
-        for meta in self.document_metadata:
-            if meta.get('chunk_id') == chunk_id:
-                return meta.get('source_file') or 'unknown'
+        """Best-effort resolve filename for a given chunk id from database."""
+        try:
+            chunk = document_chunk_service.get_chunk_by_id(chunk_id)
+            if chunk:
+                doc = document_service.get_document_by_id(chunk.document_id)
+                if doc:
+                    return doc.filename
+        except Exception as e:
+            logger.warning(f"Error finding filename for chunk {chunk_id}: {str(e)}")
         return 'unknown'
 
     def _get_processed_files_markdown(self) -> str:
@@ -464,63 +405,25 @@ class Chatbot:
         return md_string
     
     def delete_document(self, filename: str) -> Tuple[bool, str]:
-        """Delete a document from database and memory."""
+        """Delete a document from database and tracking."""
         try:
             # Check if document exists in database
             doc = document_service.get_document_by_filename(filename)
-            db_exists = doc is not None
-            memory_exists = filename in self.processed_files
-            
-            if not db_exists and not memory_exists:
-                return False, f"Document '{filename}' not found in database or memory."
-            
-            # Delete from database if it exists there
-            db_deleted = False
-            if db_exists:
-                deleted = document_service.delete_document_by_filename(filename)
-                if not deleted:
-                    return False, f"Failed to delete document '{filename}' from database."
-                db_deleted = True
-                logger.info(f"Deleted document '{filename}' from database")
-            else:
-                logger.warning(f"Document '{filename}' exists only in memory, not in database")
-            
-            # Delete from memory cache
-            indices_to_remove = []
-            for idx, metadata in enumerate(self.document_metadata):
-                if metadata.get('source_file') == filename:
-                    indices_to_remove.append(idx)
-            
-            # Delete in reverse order to maintain indices
-            for idx in reversed(indices_to_remove):
-                del self.document_metadata[idx]
-                del self.documents[idx]
-                
-                # Delete corresponding embedding
-                if self.embeddings is not None and len(self.embeddings) > idx:
-                    self.embeddings = np.delete(self.embeddings, idx, axis=0)
-            
-            # Delete Vintern embeddings
-            vintern_indices_to_remove = []
-            for idx, metadata in enumerate(self.vintern_doc_metadata):
-                if metadata.get('source_file') == filename:
-                    vintern_indices_to_remove.append(idx)
-            
-            for idx in reversed(vintern_indices_to_remove):
-                del self.vintern_doc_metadata[idx]
-                if idx < len(self.vintern_doc_embeddings):
-                    del self.vintern_doc_embeddings[idx]
-            
-            # Remove from processed_files
+
+            if not doc:
+                return False, f"Document '{filename}' not found in database."
+
+            # Delete from database (cascades to chunks and embeddings)
+            deleted = document_service.delete_document_by_filename(filename)
+            if not deleted:
+                return False, f"Failed to delete document '{filename}' from database."
+
+            # Remove from processed_files tracker
             self.processed_files.discard(filename)
-            
-            if db_deleted:
-                logger.info(f"Đã xóa tài liệu '{filename}' từ database và bộ nhớ. Số chunks còn lại: {len(self.documents)}")
-                return True, f"Đã xóa tài liệu '{filename}' từ database và bộ nhớ."
-            else:
-                logger.info(f"Đã xóa tài liệu '{filename}' từ bộ nhớ (không tồn tại trong database). Số chunks còn lại: {len(self.documents)}")
-                return True, f"Đã xóa tài liệu '{filename}' từ bộ nhớ."
-            
+
+            logger.info(f"Deleted document '{filename}' from database")
+            return True, f"Đã xóa tài liệu '{filename}' từ database."
+
         except Exception as e:
             error_msg = f"Lỗi khi xóa tài liệu: {str(e)}"
             logger.error(error_msg)
@@ -564,29 +467,68 @@ class Chatbot:
             logger.error(f"Lỗi khi lấy danh sách tài liệu từ database: {str(e)}")
             return []
 
-    def search_relevant_documents(self, query: str, top_k: int = 5) -> List[Tuple[str, float, dict]]:
-        """Tìm kiếm các đoạn văn liên quan, trả về cả metadata."""
+    def search_relevant_documents(self, query: str, top_k: int = 5, recency_weight: float = 0.15) -> List[Tuple[str, float, dict]]:
+        """
+        Tìm kiếm các đoạn văn liên quan trực tiếp từ database với recency boost.
+
+        Args:
+            query: Câu truy vấn
+            top_k: Số lượng kết quả tối đa
+            recency_weight: Trọng số cho độ mới của embeddings (0-1), mặc định 0.15
+
+        Returns:
+            List of tuples (content, similarity_score, metadata)
+        """
         try:
-            if self.embeddings is None or len(self.documents) == 0:
-                return []
+            # Generate query embedding
+            query_embedding = self.embedding_model.encode([query])[0]
 
-            query_embedding = self.embedding_model.encode([query])
-            similarities = cosine_similarity(query_embedding, self.embeddings)[0]
-            top_indices = np.argsort(similarities)[::-1][:top_k]
+            # Use database service with recency boost
+            chunks_with_scores = document_chunk_service.find_similar_chunks_by_embedding(
+                query_embedding=query_embedding.tolist(),
+                limit=top_k,
+                threshold=0.0,  # We'll filter later if needed
+                recency_weight=recency_weight
+            )
 
-            results = [
-                (self.documents[idx], similarities[idx], self.document_metadata[idx])
-                for idx in top_indices
-            ]
+            # Convert to expected format
+            results = []
+            for chunk, score in chunks_with_scores:
+                # Get document info
+                doc = document_service.get_document_by_id(chunk.document_id)
+
+                metadata = {
+                    'chunk_id': chunk.id,
+                    'source_file': doc.filename if doc else 'unknown',
+                    'file_type': doc.file_type if doc else 'unknown',
+                    'heading': chunk.heading or '',
+                    'length': len(chunk.content),
+                    'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
+                    'created_at': chunk.created_at
+                }
+
+                results.append((chunk.content, score, metadata))
+
             return results
+
         except Exception as e:
             logger.error(f"Lỗi tìm kiếm: {str(e)}")
             return []
 
-    def search_relevant_documents_vintern(self, query: str, top_k: int = 5) -> List[Tuple[str, float, dict]]:
-        """Tìm kiếm đa phương thức bằng Vintern; trả về (context_text, score, metadata)."""
+    def search_relevant_documents_vintern(self, query: str, top_k: int = 5, recency_weight: float = 0.15) -> List[Tuple[str, float, dict]]:
+        """
+        Tìm kiếm đa phương thức bằng Vintern trực tiếp từ database với recency boost.
+
+        Args:
+            query: Câu truy vấn
+            top_k: Số lượng kết quả tối đa
+            recency_weight: Trọng số cho độ mới của embeddings (0-1), mặc định 0.15
+
+        Returns:
+            List of tuples (content, similarity_score, metadata)
+        """
         try:
-            if not self.vintern_service.is_enabled() or not self.vintern_doc_embeddings:
+            if not self.vintern_service.is_enabled():
                 return []
 
             # Chuẩn bị embedding cho query
@@ -594,20 +536,42 @@ class Chatbot:
             if q_emb is None:
                 return []
 
-            # Score documents against query
-            scores = self.vintern_service.score_multi_vector(q_emb, self.vintern_doc_embeddings)
-            if scores is None:
-                return []
+            # Convert tensor to list for database query
+            if isinstance(q_emb, torch.Tensor):
+                query_embedding = q_emb.cpu().numpy().tolist()
+            else:
+                query_embedding = q_emb
 
-            top_indices = scores.argsort(descending=True)[:top_k]
+            # Use database service with recency boost
+            chunks_with_scores = document_chunk_service.find_similar_chunks_by_vintern_embedding(
+                query_embedding=query_embedding,
+                limit=top_k,
+                threshold=0.0,  # We'll filter later if needed
+                recency_weight=recency_weight
+            )
 
+            # Convert to expected format
             results: List[Tuple[str, float, dict]] = []
-            for idx in top_indices.tolist():
-                meta = self.vintern_doc_metadata[idx]
-                score = float(scores[idx].item())
-                context_text = meta.get('content', '') or f"[Tài liệu {meta.get('type','unknown')} từ file {meta.get('source_file','?')}]"
-                results.append((context_text, score, meta))
+            for chunk, score in chunks_with_scores:
+                # Get document info
+                doc = document_service.get_document_by_id(chunk.document_id)
+
+                context_text = chunk.content or f"[Tài liệu {doc.file_type if doc else 'unknown'} từ file {doc.filename if doc else '?'}]"
+
+                metadata = {
+                    'type': 'text',
+                    'source_file': doc.filename if doc else 'unknown',
+                    'file_type': doc.file_type if doc else 'unknown',
+                    'heading': chunk.heading or '',
+                    'content': chunk.content,
+                    'preview': chunk.content[:150] + "..." if chunk.content and len(chunk.content) > 150 else chunk.content,
+                    'created_at': chunk.created_at
+                }
+
+                results.append((context_text, score, metadata))
+
             return results
+
         except Exception as e:
             logger.error(f"Lỗi tìm kiếm Vintern: {str(e)}")
             return []
@@ -615,8 +579,9 @@ class Chatbot:
     def generate_answer(self, query: str, chat_history: List) -> Tuple[str, List, List[str]]:
         """Tạo câu trả lời dựa trên tài liệu và lịch sử chat"""
         try:
-            vintern_results = self.search_relevant_documents_vintern(query, top_k=5) if self.vintern_service.is_enabled() else []
-            text_results = self.search_relevant_documents(query, top_k=5) if self.documents else []
+            # Search using database-backed queries with recency boost
+            vintern_results = self.search_relevant_documents_vintern(query, top_k=5, recency_weight=0.15) if self.vintern_service.is_enabled() else []
+            text_results = self.search_relevant_documents(query, top_k=5, recency_weight=0.15)
 
             combined = vintern_results + text_results
             combined.sort(key=lambda x: x[1], reverse=True)
