@@ -1,23 +1,16 @@
 import os
-import numpy as np
 from sentence_transformers import SentenceTransformer
-from sklearn.metrics.pairwise import cosine_similarity
 import google.generativeai as genai
-from typing import List, Dict, Tuple, Optional
+from typing import List, Dict, Tuple
 import logging
 from pathlib import Path
 from PIL import Image
 import torch
-from transformers import AutoModel, AutoProcessor
 import asyncio
-from concurrent.futures import ThreadPoolExecutor
-
 # Import database services
 from src.config.db.services import (
     document_service, document_chunk_service, embedding_cache_service
 )
-from src.config.db.db_connection import get_database_connection
-from src.config.db.models import Document, DocumentChunk
 from src.services.base.implements.IngestionService import IngestionService
 from src.services.base.implements.PdfIngestionPipeline import PdfIngestionPipeline
 from src.services.base.implements.ImageIngestionPipeline import ImageIngestionPipeline
@@ -29,42 +22,16 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def vector_to_numpy(embedding) -> np.ndarray:
-    """
-    Convert pgvector Vector type to numpy array.
-    
-    Args:
-        embedding: Vector embedding from database (pgvector type)
-        
-    Returns:
-        numpy array of the embedding
-    """
-    if embedding is None:
-        return None
-    if isinstance(embedding, np.ndarray):
-        return embedding
-    if isinstance(embedding, list):
-        return np.array(embedding, dtype=np.float32)
-    # For pgvector Vector type, it should be convertible directly
-    try:
-        return np.array(embedding, dtype=np.float32)
-    except Exception as e:
-        logger.warning(f"Error converting embedding to numpy: {str(e)}")
-        return None
-
 class Chatbot:
     def __init__(self, google_api_key: str):
         """Khởi tạo chatbot với API key - synchronous initialization"""
         self.google_api_key = google_api_key
         self._initialization_complete = False
 
-        # Initialize memory structures first
-        self.documents = []
-        self.embeddings = None
-        self.document_metadata = []
+        # Initialize tracking structures
+        # Note: We no longer load documents/embeddings into memory.
+        # All similarity searches are performed directly against the database.
         self.processed_files = set()
-        self.vintern_doc_embeddings: List[torch.Tensor] = []
-        self.vintern_doc_metadata: List[Dict] = []
 
         # Run synchronous initialization
         self.setup_models()
@@ -86,13 +53,8 @@ class Chatbot:
         instance.google_api_key = google_api_key
         instance._initialization_complete = False
 
-        # Initialize memory structures
-        instance.documents = []
-        instance.embeddings = None
-        instance.document_metadata = []
+        # Initialize tracking structures
         instance.processed_files = set()
-        instance.vintern_doc_embeddings = []
-        instance.vintern_doc_metadata = []
 
         # Initialize VinternEmbeddingService BEFORE concurrent tasks
         # This is needed because load_documents_from_database() may access it
@@ -174,14 +136,9 @@ class Chatbot:
             logger.error(f"Error clearing database: {str(e)}")
 
         # Clear tracking structures
-        self.documents = []
-        self.embeddings = None
-        self.document_metadata = []
         self.processed_files = set()
-        self.vintern_doc_embeddings: List[torch.Tensor] = []
-        self.vintern_doc_metadata: List[Dict] = []
 
-        logger.info("Chatbot memory and database cleared")
+        logger.info("Chatbot database and tracking cleared")
         return (
             [],  # Xóa lịch sử chat
             "",  # Xóa text box câu hỏi
@@ -293,6 +250,7 @@ class Chatbot:
             loaded_after = self._load_document_into_memory(doc.id, desired_filename, file_type)
 
             # Vintern: bổ sung embedding nếu khả dụng cho text (single chunk) và ảnh
+            # All embeddings are saved to database - no in-memory caching
             if self.vintern_service.is_enabled():
                 try:
                     chunks = document_chunk_service.get_chunks_by_document(doc.id)
@@ -308,36 +266,24 @@ class Chatbot:
                                     vintern_embedding=ve,
                                     vintern_model=self.vintern_service.get_model_name(),
                                 )
-                                # update in-memory caches too
-                                self.vintern_doc_embeddings.append(vintern_text_embs[idx])
-                                self.vintern_doc_metadata.append({
-                                    'type': 'text',
-                                    'source_file': desired_filename,
-                                    'file_type': file_type,
-                                    'heading': c.heading or '',
-                                    'content': c.content,
-                                    'preview': c.content[:150] + "..." if len(c.content) > 150 else c.content,
-                                })
+                                logger.debug(f"Saved Vintern embedding for chunk {c.id}")
 
-                    # For images, add image embedding entry
+                    # For images, add image embedding entry to database
                     if is_image:
                         try:
                             img = Image.open(pipeline_path)
                             if img.mode != 'RGB':
                                 img = img.convert('RGB')
                             img_embs = self.vintern_service.embed_images([img])
-                            if img_embs:
-                                self.vintern_doc_embeddings.append(img_embs[0])
-                                # Use the first chunk (or nothing) for preview content
-                                preview_text = chunks[0].content if chunks else ''
-                                self.vintern_doc_metadata.append({
-                                    'type': 'image',
-                                    'source_file': desired_filename,
-                                    'file_type': file_type,
-                                    'heading': 'Hình ảnh',
-                                    'content': preview_text,
-                                    'preview': (preview_text[:150] + '...') if preview_text else 'Ảnh không có OCR',
-                                })
+                            if img_embs and chunks:
+                                # Store image embedding in the first chunk
+                                ve = img_embs[0].cpu().numpy().tolist()
+                                document_chunk_service.update_chunk_vintern_embedding(
+                                    chunk_id=chunks[0].id,
+                                    vintern_embedding=ve,
+                                    vintern_model=self.vintern_service.get_model_name(),
+                                )
+                                logger.debug(f"Saved Vintern image embedding for chunk {chunks[0].id}")
                         except Exception as img_e:
                             logger.warning("Không thể tạo Vintern embedding cho ảnh: %s", str(img_e))
                 except Exception as vintern_e:
