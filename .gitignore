@@ -157,3 +157,4 @@ frontend/release/
 .env.example
 frontend/app/.env.development
 frontend/app/.env.production
+.claude/settings.local.json
