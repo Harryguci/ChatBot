@@ -99,12 +99,29 @@ def health_check():
 # Include chatbot router AFTER other API endpoints
 app.include_router(chatbot_router)
 
-# Mount static files from the React app release folder
-# Must be after all API routes
+# Serve static assets from Vite build
+# Keep assets under a dedicated mount
 app.mount("/assets", StaticFiles(directory="frontend/release/assets"), name="assets")
 
-# Mount the root as static to serve HTML files
-app.mount("/", StaticFiles(directory="frontend/release", html=True), name="static")
+# Serve specific top-level static files that the SPA expects
+@app.get("/vite.svg", include_in_schema=False)
+def vite_svg():
+    path = os.path.join("frontend", "release", "vite.svg")
+    if os.path.exists(path):
+        return FileResponse(path)
+    return JSONResponse(status_code=404, content={"detail": "Not found"})
+
+# SPA fallback: return index.html for any non-API route
+@app.get("/", include_in_schema=False)
+@app.get("/{full_path:path}", include_in_schema=False)
+def spa_fallback(full_path: str = ""):
+    # Do not intercept API routes
+    if full_path.startswith("api/") or full_path == "api":
+        raise HTTPException(status_code=404)
+    index_path = os.path.join("frontend", "release", "index.html")
+    if os.path.exists(index_path):
+        return FileResponse(index_path)
+    return JSONResponse(status_code=404, content={"detail": "SPA index not found"})
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000)

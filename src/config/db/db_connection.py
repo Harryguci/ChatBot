@@ -81,6 +81,7 @@ class DatabaseConnection:
             self.SessionLocal = sessionmaker(
                 autocommit=False,
                 autoflush=False,
+                expire_on_commit=False,  # Keep attributes accessible after commit
                 bind=self.engine
             )
             

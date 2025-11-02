@@ -16,7 +16,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from src.main import app
 from src.routers.chatbot import get_chatbot, chatbot_instance
-from src.chatbot_memory import PDFChatbot
+from src.chatbot_memory import Chatbot
 
 @pytest.fixture(scope="session")
 def test_client():
@@ -26,7 +26,7 @@ def test_client():
 @pytest.fixture
 def mock_chatbot():
     """Create a mock PDFChatbot instance."""
-    mock_chatbot = Mock(spec=PDFChatbot)
+    mock_chatbot = Mock(spec=Chatbot)
     
     # Mock the attributes
     mock_chatbot.documents = []

@@ -119,12 +119,16 @@ class DocumentService(DatabaseService):
             return session.query(Document).order_by(desc(Document.created_at)).all()
     
     def get_all_processed_documents(self) -> List[Document]:
-        """Get all documents that have been successfully processed (have chunks)."""
+        """Get all documents that have been successfully processed (have chunks).
+        Uses distinct on primary key to avoid DISTINCT over JSON columns (PostgreSQL limitation)."""
         with self.db.get_session() as session:
-            # Get documents that have at least one chunk
-            documents = session.query(Document).join(
-                DocumentChunk, Document.id == DocumentChunk.document_id
-            ).distinct().order_by(desc(Document.created_at)).all()
+            documents = (
+                session.query(Document)
+                .join(DocumentChunk, Document.id == DocumentChunk.document_id)
+                .distinct(Document.id)
+                .order_by(desc(Document.created_at))
+                .all()
+            )
             return documents
     
     def get_document_by_filename(self, filename: str) -> Optional[Document]:

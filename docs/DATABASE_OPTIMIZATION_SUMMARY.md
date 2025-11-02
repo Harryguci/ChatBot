@@ -267,3 +267,4 @@ DB_MAX_OVERFLOW=20
 ## Conclusion
 
 The database integration successfully optimizes the PDFChatbot for production use with large datasets. The hybrid approach of persistent storage with in-memory caching provides the best of both worlds: scalability and performance.
+

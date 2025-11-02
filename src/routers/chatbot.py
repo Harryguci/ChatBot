@@ -8,7 +8,7 @@ import logging
 from pathlib import Path
 
 # Import the PDFChatbot class
-from ..chatbot_memory import PDFChatbot
+from ..chatbot_memory import Chatbot
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/api/chatbot", tags=["chatbot"])
 
 # Global chatbot instance
-chatbot_instance: Optional[PDFChatbot] = None
+chatbot_instance: Optional[Chatbot] = None
 
 # Pydantic models for request/response
 class ChatRequest(BaseModel):
@@ -57,7 +57,7 @@ class DocumentsListResponse(BaseModel):
     total_documents: int
 
 # Dependency to get chatbot instance
-def get_chatbot() -> PDFChatbot:
+def get_chatbot() -> Chatbot:
     global chatbot_instance
     if chatbot_instance is None:
         # Get API key from environment variable
@@ -68,7 +68,7 @@ def get_chatbot() -> PDFChatbot:
                 detail="Google API key not found. Please set GOOGLE_API_KEY environment variable."
             )
         try:
-            chatbot_instance = PDFChatbot(google_api_key)
+            chatbot_instance = Chatbot(google_api_key)
         except Exception as e:
             logger.error(f"Failed to initialize chatbot: {str(e)}")
             raise HTTPException(status_code=500, detail=f"Failed to initialize chatbot: {str(e)}")
@@ -77,7 +77,7 @@ def get_chatbot() -> PDFChatbot:
 @router.post("/upload-document", response_model=ProcessPDFResponse)
 async def upload_and_process_document(
     file: UploadFile = File(...),
-    chatbot: PDFChatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot)
 ):
     """
     Upload and process a PDF file or image for the chatbot to use in answering questions.
@@ -134,7 +134,7 @@ async def upload_and_process_document(
 @router.post("/upload-pdf", response_model=ProcessPDFResponse)
 async def upload_and_process_pdf(
     file: UploadFile = File(...),
-    chatbot: PDFChatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot)
 ):
     """
     Upload and process a PDF file for the chatbot to use in answering questions.
@@ -184,7 +184,7 @@ async def upload_and_process_pdf(
 @router.post("/chat", response_model=ChatResponse)
 async def chat_with_documents(
     request: ChatRequest,
-    chatbot: PDFChatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot)
 ):
     """
     Ask a question about the uploaded documents and get an answer.
@@ -225,7 +225,7 @@ async def chat_with_documents(
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
 @router.delete("/memory")
-async def clear_memory(chatbot: PDFChatbot = Depends(get_chatbot)):
+async def clear_memory(chatbot: Chatbot = Depends(get_chatbot)):
     """
     Clear all uploaded documents and chat history from the chatbot's memory.
     """
@@ -239,7 +239,7 @@ async def clear_memory(chatbot: PDFChatbot = Depends(get_chatbot)):
         raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
 
 @router.get("/memory/status", response_model=MemoryStatus)
-async def get_memory_status(chatbot: PDFChatbot = Depends(get_chatbot)):
+async def get_memory_status(chatbot: Chatbot = Depends(get_chatbot)):
     """
     Get the current status of the chatbot's memory (processed files, total chunks, etc.).
     """
@@ -294,7 +294,7 @@ async def health_check():
         )
 
 @router.get("/memorable-documents", response_model=DocumentsListResponse)
-async def list_documents(chatbot: PDFChatbot = Depends(get_chatbot)):
+async def list_documents(chatbot: Chatbot = Depends(get_chatbot)):
     """
     Get the list of all processed documents with detailed information.
     """
@@ -309,7 +309,7 @@ async def list_documents(chatbot: PDFChatbot = Depends(get_chatbot)):
         raise HTTPException(status_code=500, detail=f"Error getting documents list: {str(e)}")
 
 @router.delete("/memorable-documents/{filename:path}")
-async def delete_document(filename: str, chatbot: PDFChatbot = Depends(get_chatbot)):
+async def delete_document(filename: str, chatbot: Chatbot = Depends(get_chatbot)):
     """
     Delete a specific document from memory by filename.
     """
