@@ -94,6 +94,12 @@ class Chatbot:
         instance.vintern_doc_embeddings = []
         instance.vintern_doc_metadata = []
 
+        # Initialize VinternEmbeddingService BEFORE concurrent tasks
+        # This is needed because load_documents_from_database() may access it
+        from src.services.base.implements.VinternEmbeddingService import VinternEmbeddingService
+        instance.vintern_service = VinternEmbeddingService()
+        logger.info("✓ Vintern service pre-initialized for async loading")
+
         # Run setup_models and load_documents_from_database concurrently
         try:
             setup_task = asyncio.create_task(
@@ -130,8 +136,12 @@ class Chatbot:
             logger.info("✓ Đã khởi tạo thành công embedding model")
 
             # Vintern Multimodal Embedding Service (RAG hình ảnh + văn bản)
-            self.vintern_service = VinternEmbeddingService()
-            logger.info("✓ Đã khởi tạo Vintern service")
+            # Only initialize if not already set (for async initialization)
+            if not hasattr(self, 'vintern_service') or self.vintern_service is None:
+                self.vintern_service = VinternEmbeddingService()
+                logger.info("✓ Đã khởi tạo Vintern service")
+            else:
+                logger.info("✓ Vintern service already initialized")
 
             # Ingestion service + pipelines
             self.ingestion_service = IngestionService()
@@ -201,12 +211,21 @@ class Chatbot:
                         'length': len(chunk.content),
                         'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content
                     })
-                    
-                    # Collect embeddings
-                    if chunk.embedding:
-                        embedding_array = vector_to_numpy(chunk.embedding)
-                        if embedding_array is not None:
-                            all_embeddings_list.append(embedding_array)
+
+                    # Collect embeddings with detailed logging
+                    if chunk.embedding is not None:
+                        logger.debug(f"  Chunk {chunk.id}: embedding exists, type={type(chunk.embedding).__name__}")
+                        try:
+                            embedding_array = vector_to_numpy(chunk.embedding)
+                            if embedding_array is not None:
+                                all_embeddings_list.append(embedding_array)
+                                logger.debug(f"    ✓ Converted to numpy: shape={embedding_array.shape}")
+                            else:
+                                logger.warning(f"    ✗ vector_to_numpy returned None for chunk {chunk.id}")
+                        except Exception as e:
+                            logger.error(f"    ✗ Error converting embedding for chunk {chunk.id}: {str(e)}")
+                    else:
+                        logger.warning(f"  Chunk {chunk.id}: No embedding found")
                 
                 # Load Vintern embeddings if available
                 if self.vintern_service.is_enabled():
@@ -234,11 +253,19 @@ class Chatbot:
             self.document_metadata = all_metadata
             
             # Rebuild embeddings array
+            logger.info(f"Collected {len(all_embeddings_list)} embeddings from {len(all_documents)} chunks")
+
             if all_embeddings_list:
                 self.embeddings = np.array(all_embeddings_list)
                 logger.info(f"✓ Loaded {len(all_documents)} chunks from {len(documents)} documents")
+                logger.info(f"✓ Embeddings matrix shape: {self.embeddings.shape}")
             else:
-                logger.warning("No embeddings found in database chunks")
+                logger.warning("⚠ No embeddings found in database chunks - Chatbot.embeddings will be None")
+                logger.warning("  This means text-based search will not work!")
+                logger.warning("  Possible causes:")
+                logger.warning("    1. Documents were processed without generating embeddings")
+                logger.warning("    2. Database migration issue")
+                logger.warning("    3. Embeddings were not saved properly")
 
             logger.info("[load_documents_from_database] Document loading completed")
 

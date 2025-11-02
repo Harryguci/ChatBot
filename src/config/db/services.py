@@ -126,7 +126,7 @@ class DocumentService(DatabaseService):
                 session.query(Document)
                 .join(DocumentChunk, Document.id == DocumentChunk.document_id)
                 .distinct(Document.id)
-                .order_by(desc(Document.created_at))
+                .order_by(Document.id, desc(Document.created_at))  # Fix: id must be first when using DISTINCT ON
                 .all()
             )
             return documents
@@ -224,11 +224,20 @@ class DocumentChunkService(DatabaseService):
             return chunk
     
     def get_chunks_by_document(self, document_id: int) -> List[DocumentChunk]:
-        """Get all chunks for a document."""
+        """Get all chunks for a document with embeddings eagerly loaded."""
         with self.db.get_session() as session:
-            return session.query(DocumentChunk).filter(
+            chunks = session.query(DocumentChunk).filter(
                 DocumentChunk.document_id == document_id
             ).order_by(DocumentChunk.chunk_index).all()
+
+            # Eagerly access embedding attributes while session is active
+            # This ensures the data is loaded before the session closes
+            for chunk in chunks:
+                # Access the embedding to load it into memory
+                _ = chunk.embedding
+                _ = chunk.vintern_embedding
+
+            return chunks
     
     def get_all_chunks_with_embeddings(self) -> List[DocumentChunk]:
         """Get all chunks with their embeddings for RAG search."""
