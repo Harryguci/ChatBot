@@ -82,6 +82,17 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && e.ctrlKey) {
+      e.preventDefault();
+      if (message.trim() || attachments.length > 0) {
+        onSendMessage(message, attachments.length > 0 ? attachments : undefined);
+        setMessage('');
+        setAttachments([]);
+      }
+    }
+  };
+
   const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []);
     // Support both PDF and image files
@@ -200,6 +211,7 @@ const InputArea: React.FC<InputAreaProps> = ({ onSendMessage, isLoading }) => {
             <textarea
               value={message}
               onChange={(e) => setMessage(e.target.value)}
+              onKeyDown={handleKeyDown}
               placeholder="Ask whatever you want...."
               className="w-full p-3 border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-purple-500 focus:border-transparent"
               rows={3}
