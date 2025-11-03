@@ -21,7 +21,7 @@ torch>=2.0.0
 transformers==4.48.0
 accelerate>=0.34.0
 decord>=0.6.0
-flash-attn>=2.5.8
+# flash-attn>=2.5.8  # Removed: Requires CUDA/complex build, not used in codebase
 
 # Google Gemini API
 google-generativeai>=0.7.0

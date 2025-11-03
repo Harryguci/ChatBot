@@ -3,8 +3,6 @@ from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
-from starlette.requests import Request
-from starlette.status import HTTP_404_NOT_FOUND
 import uvicorn
 import os
 from dotenv import load_dotenv
@@ -82,11 +80,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# API endpoints - define these first
-# @app.get("/api/")
-# def read_root():
-#     return {"message": "Hello World"}
 
 @app.get("/api/health")
 def health_check():

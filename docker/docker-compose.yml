@@ -112,22 +112,22 @@ services:
       - dev
 
   # Nginx reverse proxy (optional - for production)
-  nginx:
-    image: nginx:alpine
-    container_name: chatbot-nginx
-    ports:
-      - "80:80"
-      - "443:443"
-    volumes:
-      - ./nginx.conf:/etc/nginx/nginx.conf:ro
-      - ./ssl:/etc/nginx/ssl:ro
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - chatbot-network
-    profiles:
-      - production
+  # nginx:
+  #   image: nginx:alpine
+  #   container_name: chatbot-nginx
+  #   ports:
+  #     - "80:80"
+  #     - "443:443"
+  #   volumes:
+  #     - ./nginx.conf:/etc/nginx/nginx.conf:ro
+  #     - ./ssl:/etc/nginx/ssl:ro
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+  #   networks:
+  #     - chatbot-network
+  #   profiles:
+  #     - production
 
 networks:
   chatbot-network:
