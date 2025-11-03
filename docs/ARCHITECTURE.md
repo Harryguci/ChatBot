@@ -2,7 +2,224 @@
 
 ## System Overview
 
-This document outlines the architecture of the Chatbot system with async initialization and service-oriented design.
+This document outlines the architecture of the Chatbot system - a **database-first RAG (Retrieval-Augmented Generation)** implementation with async initialization, service-oriented design, and multimodal capabilities.
+
+### Quick Reference: End-to-End Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                     DOCUMENT INGESTION                          │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+    User uploads PDF/Image ───┘
+                              │
+                              ▼
+    ┌─────────────────────────────────────┐
+    │  Extract Content                    │
+    │  • PDF: pypdf text extraction       │
+    │  • Image: Gemini Vision OCR         │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────┐
+    │  Generate Dual Embeddings           │
+    │  • Text: 384-dim (SentenceTransf.)  │
+    │  • Vintern: 768-dim (Multimodal)    │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────┐
+    │  Store in PostgreSQL (pgvector)     │
+    │  • documents table                  │
+    │  • document_chunks table            │
+    │  • VECTOR columns for embeddings    │
+    └─────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│                     QUERY & RETRIEVAL                           │
+└─────────────────────────────────────────────────────────────────┘
+                              │
+    User asks question ────────┘
+                              │
+                              ▼
+    ┌─────────────────────────────────────┐
+    │  Embed Query                        │
+    │  • Generate 384-dim embedding       │
+    │  • Generate 768-dim Vintern (opt)   │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────┐
+    │  Database Vector Search             │
+    │  • Cosine similarity on embeddings  │
+    │  • Recency boost (15% for new docs) │
+    │  • Top 5 most relevant chunks       │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────┐
+    │  Fallback: Keyword Search (if weak) │
+    │  • PostgreSQL ILIKE on content      │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    ┌─────────────────────────────────────┐
+    │  Generate Answer (Gemini 2.0 Flash) │
+    │  • Context: Top 5 chunks            │
+    │  • Grounded response with sources   │
+    │  • Confidence score                 │
+    └─────────────┬───────────────────────┘
+                  │
+                  ▼
+    Return: Answer + Source Files + Confidence
+```
+
+### Core Architecture Principles
+
+1. **Database-First RAG**: All embeddings stored in PostgreSQL with pgvector - no in-memory embedding matrices
+2. **Recency-Weighted Retrieval**: More recent documents receive boosted similarity scores
+3. **Multimodal Embeddings**: Dual embedding strategy (SentenceTransformer + Vintern) for text and images
+4. **Hybrid Search**: Vector similarity with keyword-based fallback for robustness
+5. **Async Initialization**: Concurrent model setup and document loading for faster startup
+
+### Technology Stack
+
+| Layer | Technology | Purpose |
+|-------|------------|---------|
+| **Backend** | FastAPI | REST API server with async support |
+| **Database** | PostgreSQL + pgvector | Vector storage and similarity search |
+| **Embeddings (Text)** | SentenceTransformer (384-dim) | Multilingual semantic search |
+| **Embeddings (Multimodal)** | Vintern (768-dim) | Text + Image understanding |
+| **LLM** | Gemini 2.0 Flash | Answer generation |
+| **OCR** | Gemini Vision API | Image text extraction |
+| **Frontend** | React + Ant Design | User interface |
+| **PDF Processing** | pypdf | Text extraction from PDFs |
+
+---
+
+## RAG (Retrieval-Augmented Generation) Architecture
+
+### Overview
+
+The system implements a **database-first RAG pipeline** where all embeddings are stored and queried directly from PostgreSQL using the pgvector extension. This eliminates memory constraints and enables efficient similarity search at scale.
+
+### RAG Pipeline Flow
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RAG Pipeline (Query → Answer)                │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                  │
+│  1. User Query                                                  │
+│     │                                                            │
+│     ├─> "What is the main topic of document X?"               │
+│     │                                                            │
+│  2. Dual Embedding Generation                                  │
+│     │                                                            │
+│     ├─> SentenceTransformer (384-dim)                          │
+│     │   └─> Text embedding for semantic search                 │
+│     │                                                            │
+│     ├─> Vintern (768-dim) [Optional]                           │
+│     │   └─> Multimodal embedding (text + image capable)        │
+│     │                                                            │
+│  3. Database Vector Search (Recency-Weighted)                  │
+│     │                                                            │
+│     ├─> search_relevant_documents()                            │
+│     │   └─> SELECT * FROM document_chunks                      │
+│     │       ORDER BY (cosine_similarity * (1 + recency_boost)) │
+│     │       LIMIT top_k                                         │
+│     │                                                            │
+│     ├─> search_relevant_documents_vintern()                    │
+│     │   └─> Similar query on vintern_embedding column          │
+│     │                                                            │
+│  4. Result Fusion & Ranking                                     │
+│     │                                                            │
+│     ├─> Combine results from both search methods               │
+│     ├─> Sort by similarity score (descending)                  │
+│     └─> Filter by minimum threshold (0.1)                      │
+│     │                                                            │
+│  5. Fallback: Keyword Search (if vector search fails)          │
+│     │                                                            │
+│     └─> search_chunks_by_content(query)                        │
+│         └─> PostgreSQL LIKE/ILIKE query on content             │
+│     │                                                            │
+│  6. Context Preparation                                         │
+│     │                                                            │
+│     ├─> Select top 5 most relevant chunks                      │
+│     ├─> Format with metadata (source file, score)              │
+│     └─> Build context string for LLM                           │
+│     │                                                            │
+│  7. LLM Answer Generation                                       │
+│     │                                                            │
+│     ├─> Gemini 2.0 Flash (gemini-2.0-flash-exp)               │
+│     ├─> Prompt: Context + Query + Instructions                 │
+│     └─> Generate grounded answer with citations                │
+│     │                                                            │
+│  8. Response with Metadata                                      │
+│     │                                                            │
+│     └─> {                                                       │
+│           answer: "...",                                        │
+│           confidence: 0.85,                                     │
+│           source_files: ["doc1.pdf", "image2.png"]             │
+│         }                                                        │
+│                                                                  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Key RAG Features
+
+#### 1. Recency-Weighted Similarity Search
+
+```python
+# From chatbot_memory.py:416-438
+def search_relevant_documents(query, top_k=5, recency_weight=0.15):
+    """
+    Similarity score boosted by document recency:
+
+    final_score = cosine_similarity + (recency_weight * recency_factor)
+
+    where recency_factor decreases exponentially with document age
+    """
+```
+
+**Benefits:**
+- More recent documents ranked higher
+- Configurable boost weight (default: 15%)
+- Prevents stale information dominance
+
+#### 2. Dual Embedding Strategy
+
+| Embedding Type | Model | Dimensions | Use Case |
+|----------------|-------|------------|----------|
+| **Text (Primary)** | `paraphrase-multilingual-MiniLM-L12-v2` | 384 | General semantic search, multilingual support |
+| **Multimodal (Vintern)** | Custom Vintern model | 768 | Text + Image search, visual content understanding |
+
+**Search Priority:**
+1. Vintern search (if enabled and model loaded)
+2. Text embedding search (always available)
+3. Keyword fallback (if vector scores < 0.1)
+
+#### 3. Hybrid Search with Fallback
+
+```
+Vector Search Success (score ≥ 0.1)
+    │
+    ├─> Use vector results
+    │
+Vector Search Weak (score < 0.1)
+    │
+    ├─> Fall back to keyword search
+    │   └─> document_chunk_service.search_chunks_by_content(query)
+    │
+No Results
+    │
+    └─> Return "No relevant information found"
+```
+
+**Threshold Logic:**
+- `min_threshold = 0.1` (deliberately low to be permissive)
+- Keyword search assigns score of `0.15` to matches
+- Ensures system can always attempt to answer
 
 ---
 
@@ -142,39 +359,76 @@ This document outlines the architecture of the Chatbot system with async initial
 1. Client Request
    │
    ├─> POST /api/chatbot/upload-document
-   │   └─> Receive file upload
+   │   └─> Receive file upload (PDF or Image)
    │
 2. Save to Temporary File
    │
-3. Determine Pipeline
+   ├─> Validate file extension
+   └─> Save with original filename for tracking
    │
-   ├─> PDF?  → PdfIngestionPipeline
-   └─> Image? → ImageIngestionPipeline
+3. Check for Existing Document
    │
-4. Execute Pipeline
+   ├─> Query: document_service.check_document_exists_by_filename()
    │
-   ├─> Extract Content
-   │   └─> PDF: Extract text
-   │   └─> Image: OCR with Gemini
+   ├─> If exists with chunks:
+   │   └─> Register in processed_files tracker → Done
    │
-   ├─> Generate Embeddings
-   │   ├─> Text: SentenceTransformer
-   │   └─> Multimodal: Vintern (if enabled)
+   └─> If not exists or no chunks:
+       └─> Continue to processing
    │
-   └─> Store in Database
+4. Select Ingestion Pipeline
+   │
+   ├─> PDF (.pdf)?  → PdfIngestionPipeline
+   └─> Image (.jpg, .png, etc.)? → ImageIngestionPipeline
+   │
+5. Execute Pipeline: Extract → Embed → Store
+   │
+   ├─> EXTRACT Content
+   │   ├─> PDF: pypdf.PdfReader (text extraction)
+   │   └─> Image: Gemini Vision API (OCR + description)
+   │
+   ├─> EMBED Content (Dual Strategy)
+   │   │
+   │   ├─> Primary: SentenceTransformer (384-dim)
+   │   │   └─> Generate text embedding
+   │   │
+   │   └─> Optional: Vintern (768-dim)
+   │       ├─> Text: vintern_service.embed_texts()
+   │       └─> Image: vintern_service.embed_images()
+   │
+   └─> STORE in Database
+       │
        ├─> Create Document record
-       ├─> Create DocumentChunk record(s)
-       └─> Store embeddings (pgvector)
+       │   └─> documents table (filename, file_type, status)
+       │
+       ├─> Create DocumentChunk record
+       │   ├─> document_chunks table
+       │   ├─> Store content (full text)
+       │   ├─> Store embedding (VECTOR(384))
+       │   └─> Store vintern_embedding (VECTOR(768)) [if available]
+       │
+       └─> Database handles vector indexing automatically
    │
-5. Load into Memory
+6. Register in Tracker (No In-Memory Loading)
    │
-   └─> Update in-memory caches
-       ├─> documents list
-       ├─> embeddings matrix
-       └─> metadata list
+   ├─> Add filename to processed_files set
+   ├─> Note: Embeddings remain in database only
+   └─> Similarity searches query database directly
    │
-6. Return Success Response
+7. Return Success Response
+   │
+   └─> {
+         status: "success",
+         chunks_count: N,
+         total_chunks_in_db: M
+       }
 ```
+
+**Key Changes from Traditional RAG:**
+- ❌ No in-memory embedding matrices
+- ✅ All embeddings stored in PostgreSQL with pgvector
+- ✅ Database-backed similarity search with SQL queries
+- ✅ Recency-weighted scoring at database level
 
 ### Query and Answer Generation
 
@@ -182,35 +436,96 @@ This document outlines the architecture of the Chatbot system with async initial
 1. Client Query
    │
    ├─> POST /api/chatbot/chat
-   │   └─> { query: "What is...?" }
+   │   └─> { query: "What is...?", chat_history: [...] }
    │
-2. Search Relevant Documents
+2. Dual Embedding Generation for Query
    │
-   ├─> Text Search (SentenceTransformer)
-   │   └─> Cosine similarity on embeddings
+   ├─> Generate text embedding (384-dim)
+   │   └─> query_embedding = embedding_model.encode([query])[0]
    │
-   ├─> Multimodal Search (Vintern, if enabled)
-   │   └─> Multi-vector scoring
+   └─> Generate Vintern embedding (768-dim) [if enabled]
+       └─> q_emb = vintern_service.process_query(query)
    │
-   └─> Combine and rank results
+3. Database-Backed Similarity Search (Recency-Weighted)
    │
-3. Generate Answer
+   ├─> search_relevant_documents(query, top_k=5, recency_weight=0.15)
+   │   │
+   │   └─> SQL Query to PostgreSQL:
+   │       │
+   │       ├─> SELECT chunk.*, document.*,
+   │       │   (1 - (embedding <=> query_embedding)) * (1 + recency_boost)
+   │       │   AS similarity_score
+   │       │
+   │       ├─> FROM document_chunks chunk
+   │       │   JOIN documents doc ON chunk.document_id = doc.id
+   │       │
+   │       ├─> WHERE embedding IS NOT NULL
+   │       │
+   │       └─> ORDER BY similarity_score DESC
+   │           LIMIT top_k
    │
-   ├─> Prepare context from top results
+   ├─> search_relevant_documents_vintern(query, top_k=5) [if enabled]
+   │   │
+   │   └─> Similar SQL query using vintern_embedding column
    │
-   ├─> Call Gemini LLM
-   │   └─> With context and query
+   └─> Combine & Rank Results
+       │
+       ├─> Merge both result lists
+       ├─> Sort by similarity score (descending)
+       └─> Take top 5 overall
    │
-   └─> Extract confidence score
+4. Fallback: Keyword Search (if scores < 0.1 threshold)
    │
-4. Return Response
+   └─> document_chunk_service.search_chunks_by_content(query)
+       │
+       └─> SQL: SELECT * FROM document_chunks
+           WHERE content ILIKE '%query%'
+           LIMIT 5
    │
-   └─> {
-         answer: "...",
-         confidence: 0.85,
-         source_files: ["doc1.pdf", "image2.png"]
+5. Context Preparation
+   │
+   ├─> Select top 5 chunks
+   │
+   ├─> Format context string:
+   │   └─> "--- (From file: 'X.pdf', Relevance: 0.85) ---"
+   │       "[chunk content]"
+   │
+   └─> Extract source_files from top 1-2 results only
+   │
+6. LLM Answer Generation (Gemini 2.0 Flash)
+   │
+   ├─> Build prompt:
+   │   │
+   │   ├─> System instructions (grounding, citation rules)
+   │   ├─> Context from retrieved chunks
+   │   └─> User query
+   │
+   ├─> Call: llm.generate_content(prompt)
+   │
+   └─> Extract answer text
+   │
+7. Confidence Scoring & Response
+   │
+   ├─> confidence_score = top_result_similarity
+   │
+   ├─> Add confidence label:
+   │   ├─> < 0.4: "Low - May not be closely related"
+   │   ├─> 0.4-0.65: "Medium"
+   │   └─> > 0.65: "High"
+   │
+   └─> Return:
+       {
+         answer: "... <br/>Confidence: 85% (High)",
+         chat_history: [..., (query, answer)],
+         source_files: ["doc1.pdf"]
        }
 ```
+
+**Database Query Optimization:**
+- Uses PostgreSQL pgvector extension for vector operations
+- `<=>` operator: Cosine distance (1 - cosine similarity)
+- Recency boost computed at database level
+- Indexed vector columns for fast similarity search
 
 ---
 
@@ -405,20 +720,105 @@ async def get_chatbot() -> Chatbot:
 ## Performance Optimizations
 
 ### 1. Concurrent Initialization
-- Setup models and load documents in parallel
+- Setup models and load documents in parallel using `asyncio.gather()`
 - Reduces total initialization time by ~30-40%
+- Model loading and database queries run simultaneously
 
-### 2. Vector Database
-- pgvector extension for fast similarity search
-- Indexed embeddings for O(log n) lookups
+**Implementation:**
+```python
+# From chatbot_memory.py:66-75
+setup_task = asyncio.create_task(asyncio.to_thread(instance.setup_models))
+load_task = asyncio.create_task(asyncio.to_thread(instance.load_documents_from_database))
+await asyncio.gather(setup_task, load_task)
+```
 
-### 3. In-Memory Caching
-- Documents and embeddings cached in RAM
-- No disk I/O during query processing
+### 2. Database-First Architecture (No In-Memory Embeddings)
 
-### 4. Batch Processing
+**Traditional RAG Issues:**
+- ❌ All embeddings loaded into RAM
+- ❌ Memory usage scales linearly with document count
+- ❌ System crashes when documents exceed available RAM
+- ❌ Cold start requires loading all embeddings
+
+**This Implementation:**
+- ✅ Zero embeddings in memory
+- ✅ Constant memory footprint regardless of document count
+- ✅ pgvector extension handles similarity search in PostgreSQL
+- ✅ Instant cold start (no embedding loading phase)
+
+**Memory Comparison:**
+```
+Traditional RAG:
+  10,000 chunks × 384 dims × 4 bytes = ~15 MB (text embeddings)
+  10,000 chunks × 768 dims × 4 bytes = ~30 MB (vintern embeddings)
+  Total: ~45 MB per 10k chunks
+
+Database-First RAG:
+  Embeddings: 0 MB (stored in database)
+  Metadata only: ~1-2 MB per 10k chunks
+  Total: ~2 MB per 10k chunks (95% reduction)
+```
+
+### 3. Vector Database with pgvector
+
+**Key Features:**
+- PostgreSQL extension for vector operations
+- Indexed embeddings for O(log n) similarity search
+- Native cosine distance operator (`<=>`)
+- Supports vectors up to 16,000 dimensions
+
+**Indexing Strategy:**
+```sql
+CREATE INDEX idx_embedding ON document_chunks
+USING ivfflat (embedding vector_cosine_ops);
+
+CREATE INDEX idx_vintern_embedding ON document_chunks
+USING ivfflat (vintern_embedding vector_cosine_ops);
+```
+
+### 4. Recency-Weighted Scoring
+
+**Problem:** Older documents dominate search results even when newer, more relevant docs exist
+
+**Solution:** Boost similarity scores for recent documents
+```python
+# Recency weight: 0.15 (15% boost for most recent docs)
+final_score = cosine_similarity + (recency_weight * recency_factor)
+
+# recency_factor decreases exponentially with age
+# Most recent doc: recency_factor ≈ 1.0
+# 1 month old: recency_factor ≈ 0.5
+# 6 months old: recency_factor ≈ 0.1
+```
+
+**Benefits:**
+- Favors up-to-date information
+- Configurable boost weight
+- Prevents information staleness
+
+### 5. Hybrid Search with Fallback
+
+**Reliability Hierarchy:**
+1. **Primary:** Vintern multimodal search (if enabled)
+2. **Secondary:** SentenceTransformer text search
+3. **Fallback:** PostgreSQL keyword search (ILIKE)
+
+**When fallback triggers:**
+- All vector results have similarity < 0.1
+- No embeddings available
+- Query contains very specific terms
+
+### 6. Batch Embedding Generation
 - Multiple texts/images embedded in single batch
 - Reduces model inference overhead
+- GPU utilization optimization for Vintern
+
+**Implementation:**
+```python
+# From chatbot_memory.py:258-269
+texts = [chunk.content for chunk in chunks]
+vintern_text_embs = self.vintern_service.embed_texts(texts)  # Batch processing
+```
 
 ---
 
@@ -509,5 +909,157 @@ Load Balancer → Multiple Chatbot Instances → Shared Database
 
 ---
 
-**Last Updated:** 2025-11-02
-**Version:** 2.0.0
+## Architecture Summary: Database-First RAG
+
+### What Makes This Different
+
+This chatbot implements a **database-first RAG architecture** that fundamentally differs from traditional in-memory RAG systems:
+
+#### Traditional RAG Architecture
+```
+Document → Embed → Store in DB
+                 ↓
+              Load into RAM (embeddings matrix)
+                 ↓
+Query → Embed → Search in RAM → Retrieve chunks → LLM
+```
+
+**Problems:**
+- Memory usage grows with document count
+- Cold start requires loading all embeddings
+- Limited by available RAM
+- Duplicate storage (DB + RAM)
+
+#### This Implementation (Database-First RAG)
+```
+Document → Embed → Store in DB (with pgvector)
+                 ↓
+              (No loading to RAM)
+                 ↓
+Query → Embed → Search in DB → Retrieve chunks → LLM
+                 ↑
+            pgvector handles
+            similarity search
+```
+
+**Benefits:**
+- ✅ Constant memory usage (~2MB per 10k chunks vs ~45MB)
+- ✅ Instant cold start (no loading phase)
+- ✅ Unlimited scalability (limited by disk, not RAM)
+- ✅ Single source of truth (database only)
+- ✅ Persistent storage with ACID guarantees
+
+### Key Technical Decisions
+
+| Aspect | Decision | Rationale |
+|--------|----------|-----------|
+| **Embedding Storage** | PostgreSQL + pgvector | Eliminates memory constraints, enables persistent vector search |
+| **Similarity Search** | Database queries | O(log n) with indexes, no need to load embeddings into RAM |
+| **Recency Weighting** | 15% boost for recent docs | Favors up-to-date information, prevents stale results |
+| **Dual Embeddings** | Text (384-dim) + Vintern (768-dim) | Multimodal support for text and images |
+| **Search Fallback** | Vector → Keyword | Ensures robustness when vector search fails |
+| **Initialization** | Async with `asyncio.gather()` | 30-40% faster startup via concurrent loading |
+| **LLM** | Gemini 2.0 Flash | Fast, multimodal, cost-effective |
+| **Chunk Strategy** | Single chunk per document | Simplifies ingestion, suitable for short documents |
+
+### System Characteristics
+
+**Strengths:**
+- 📊 Scalable to millions of documents (limited by disk space)
+- ⚡ Fast cold start (no embedding loading)
+- 💾 Low memory footprint (constant regardless of doc count)
+- 🔄 Recency-aware search (newer docs ranked higher)
+- 🖼️ Multimodal support (text + images via Vintern)
+- 🔍 Hybrid search (vector + keyword fallback)
+- 🛡️ ACID compliance (PostgreSQL transactions)
+
+**Trade-offs:**
+- 🌐 Requires PostgreSQL + pgvector extension
+- 📡 Network latency for each query (DB round-trip)
+- 🔧 More complex setup than in-memory approaches
+- ⏱️ Slightly slower per-query than pure in-memory (negligible for most use cases)
+
+### Performance Profile
+
+| Operation | Time Complexity | Notes |
+|-----------|-----------------|-------|
+| **Document Upload** | O(n) where n = doc size | Embedding generation is the bottleneck |
+| **Similarity Search** | O(log m) where m = total chunks | pgvector IVFFlat index |
+| **Answer Generation** | O(k) where k = top_k chunks | LLM latency dominates (~1-2s) |
+| **Cold Start** | O(1) | No embedding loading needed |
+| **Memory Usage** | O(1) | Constant regardless of document count |
+
+### Deployment Recommendations
+
+**Development:**
+```bash
+# Local PostgreSQL with pgvector
+docker run -d \
+  -e POSTGRES_PASSWORD=password \
+  -e POSTGRES_DB=chatbot \
+  -p 5432:5432 \
+  ankane/pgvector
+```
+
+**Production:**
+- Use managed PostgreSQL with pgvector (AWS RDS, GCP Cloud SQL, Azure)
+- Configure connection pooling (recommended: 10-20 connections)
+- Enable pgvector indexes on both embedding columns
+- Monitor database query performance
+- Consider read replicas for high query volume
+
+**Scaling Strategy:**
+- Vertical scaling: Increase database instance size
+- Horizontal scaling: Read replicas for query distribution
+- Caching layer: Redis for frequently accessed chunks (optional)
+- Async ingestion: Queue system for document processing (future)
+
+---
+
+## Future Architecture Improvements
+
+### 1. Microservices Architecture
+```
+┌──────────────┐  ┌──────────────┐  ┌──────────────┐
+│   Ingestion  │  │   Embedding  │  │   Query      │
+│   Service    │  │   Service    │  │   Service    │
+└──────────────┘  └──────────────┘  └──────────────┘
+```
+
+### 2. Message Queue for Processing
+```
+Upload → Queue (RabbitMQ/Kafka) → Worker Pool → Database
+            │
+            └─> Process documents asynchronously
+```
+
+### 3. Advanced Chunking Strategy
+- Current: 1 chunk per document
+- Future: Semantic chunking with overlapping windows
+- Benefit: Better granularity for long documents
+
+### 4. Distributed Caching
+```
+Redis/Memcached for:
+  - Frequently accessed chunks
+  - Recent query results
+  - Embedding cache for common queries
+```
+
+### 5. Horizontal Scaling
+```
+Load Balancer → Multiple Chatbot Instances → Shared Database
+                                            → Read Replicas
+```
+
+### 6. Advanced Retrieval Techniques
+- **Hypothetical Document Embeddings (HyDE)**: Generate hypothetical answers, embed, search
+- **Query Expansion**: Expand user query with synonyms/related terms
+- **Re-ranking**: Two-stage retrieval (fast recall + slow rerank)
+- **Contextual Compression**: Remove irrelevant parts of retrieved chunks
+
+---
+
+**Last Updated:** 2025-11-03
+**Version:** 2.1.0 - Database-First RAG Architecture
+**Authors:** AI Development Team
