@@ -1,7 +1,6 @@
-version: "3.8"
 services:
   postgres:
-    image: postgres:15
+    image: pgvector/pgvector:pg15
     container_name: postgres-db
     environment:
       POSTGRES_DB: CHATBOT_OCR_DB
@@ -11,6 +10,32 @@ services:
       - "5432:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    networks:
+      - chatbot-network
+
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - chatbot-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
 volumes:
   postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+
+networks:
+  chatbot-network:
+    driver: bridge

@@ -86,8 +86,18 @@ class DocumentChunk(Base):
     
     __table_args__ = (
         Index('ix_document_chunks_doc_index', 'document_id', 'chunk_index'),
-        Index('ix_document_chunks_embedding_cosine', 'embedding', postgresql_ops={'embedding': 'vector_cosine_ops'}),
-        Index('ix_document_chunks_vintern_embedding_cosine', 'vintern_embedding', postgresql_ops={'vintern_embedding': 'vector_cosine_ops'}),
+        Index(
+            'ix_document_chunks_embedding_cosine',
+            'embedding',
+            postgresql_using='ivfflat',
+            postgresql_ops={'embedding': 'vector_cosine_ops'}
+        ),
+        Index(
+            'ix_document_chunks_vintern_embedding_cosine',
+            'vintern_embedding',
+            postgresql_using='ivfflat',
+            postgresql_ops={'vintern_embedding': 'vector_cosine_ops'}
+        ),
     )
     
     def __repr__(self):

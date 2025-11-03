@@ -202,19 +202,19 @@ async def upload_and_process_pdf(
 @router.post("/chat", response_model=ChatResponse)
 @limiter.limit("30/minute")
 async def chat_with_documents(
-    http_request: Request,
-    request: ChatRequest,
+    request: Request,
+    body: ChatRequest,
     chatbot: Chatbot = Depends(get_chatbot)
 ):
     """
     Ask a question about the uploaded documents and get an answer.
     """
     try:
-        if not request.query.strip():
+        if not body.query.strip():
             raise HTTPException(status_code=400, detail="Query cannot be empty")
         
         # Generate answer
-        _, updated_chat_history, source_files = chatbot.generate_answer(request.query, request.chat_history)
+        _, updated_chat_history, source_files = chatbot.generate_answer(body.query, body.chat_history)
         
         # Extract the latest answer and confidence score
         if updated_chat_history:
