@@ -14,12 +14,38 @@ services:
       - ./init-scripts:/docker-entrypoint-initdb.d:ro
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-chatbot_db}"]
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${DB_USER:-postgres} -d ${DB_NAME:-chatbot_db}",
+        ]
       interval: 10s
       timeout: 5s
       retries: 5
     networks:
       - chatbot-network
+    command:
+      - "postgres"
+      - "-c"
+      - "max_connections=200"
+
+  # Redis Cache (Phase 1 Optimization)
+  redis:
+    image: redis:7-alpine
+    container_name: chatbot-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+    networks:
+      - chatbot-network
+    command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   # Backend FastAPI service
   backend:
@@ -32,22 +58,36 @@ services:
     environment:
       - PYTHONPATH=/app/src
       - ENVIRONMENT=production
+      # Database Configuration
       - DB_HOST=postgres
       - DB_PORT=5432
       - DB_NAME=${DB_NAME:-chatbot_db}
       - DB_USER=${DB_USER:-postgres}
       - DB_PASSWORD=${DB_PASSWORD:-postgres}
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-10}
-      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-20}
+      # Phase 1 Optimization: Database Pool (30 → 150)
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
+      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-60}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
+      # Phase 1 Optimization: Redis Cache
+      - REDIS_ENABLED=${REDIS_ENABLED:-true}
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - REDIS_DB=${REDIS_DB:-0}
+      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+      # Google API Key
+      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
     volumes:
       - ../src:/app/src:ro
       - ../frontend/release:/app/frontend/release:ro
     depends_on:
       postgres:
         condition: service_healthy
+      redis:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -97,4 +137,6 @@ volumes:
   chatbot-data:
     driver: local
   postgres_data:
+    driver: local
+  redis_data:
     driver: local

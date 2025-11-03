@@ -8,6 +8,9 @@ from starlette.status import HTTP_404_NOT_FOUND
 import uvicorn
 import os
 from dotenv import load_dotenv
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
 from src.config.db.services import system_log_service
 
@@ -19,6 +22,9 @@ from src.routers.chatbot import router as chatbot_router
 
 # Import database connection
 from src.config.db import get_database_connection, initialize_database
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -62,7 +68,11 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         print(f"✗ Error closing database: {str(e)}")
 
-app = FastAPI()
+app = FastAPI(lifespan=lifespan)
+
+# Add rate limiter state and exception handler
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Add CORS middleware
 app.add_middleware(

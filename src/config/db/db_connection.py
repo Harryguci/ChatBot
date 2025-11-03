@@ -29,9 +29,9 @@ class DatabaseConfig:
         self.database = os.getenv('DB_NAME', 'chatbot_db')
         self.username = os.getenv('DB_USER', 'postgres')
         self.password = os.getenv('DB_PASSWORD', 'postgres')
-        self.pool_size = int(os.getenv('DB_POOL_SIZE', '10'))
-        self.max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '20'))
-        self.pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '30'))
+        self.pool_size = int(os.getenv('DB_POOL_SIZE', '50'))
+        self.max_overflow = int(os.getenv('DB_MAX_OVERFLOW', '100'))
+        self.pool_timeout = int(os.getenv('DB_POOL_TIMEOUT', '60'))
         self.pool_recycle = int(os.getenv('DB_POOL_RECYCLE', '3600'))
         
     @property

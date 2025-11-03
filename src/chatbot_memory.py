@@ -7,6 +7,9 @@ from pathlib import Path
 from PIL import Image
 import torch
 import asyncio
+from functools import lru_cache
+import hashlib
+import numpy as np
 # Import database services
 from src.config.db.services import (
     document_service, document_chunk_service, embedding_cache_service
@@ -16,6 +19,8 @@ from src.services.base.implements.PdfIngestionPipeline import PdfIngestionPipeli
 from src.services.base.implements.ImageIngestionPipeline import ImageIngestionPipeline
 from src.services.base.implements.BaseIngestionPipeline import BaseIngestionPipeline
 from src.services.base.implements.VinternEmbeddingService import VinternEmbeddingService
+# Import Redis cache
+from src.config.cache import get_redis_cache
 
 # Cấu hình logging
 logging.basicConfig(level=logging.INFO)
@@ -32,6 +37,9 @@ class Chatbot:
         # Note: We no longer load documents/embeddings into memory.
         # All similarity searches are performed directly against the database.
         self.processed_files = set()
+
+        # Initialize Redis cache
+        self.cache = get_redis_cache()
 
         # Run synchronous initialization
         self.setup_models()
@@ -55,6 +63,9 @@ class Chatbot:
 
         # Initialize tracking structures
         instance.processed_files = set()
+
+        # Initialize Redis cache
+        instance.cache = get_redis_cache()
 
         # Initialize VinternEmbeddingService BEFORE concurrent tasks
         # This is needed because load_documents_from_database() may access it
@@ -118,6 +129,35 @@ class Chatbot:
             logger.error(f"Lỗi khởi tạo model: {str(e)}")
             raise
 
+    @lru_cache(maxsize=1000)
+    def _get_cached_embedding(self, query: str) -> tuple:
+        """
+        Get cached embedding for a query string.
+        Uses LRU cache to store up to 1000 most recent query embeddings.
+
+        Args:
+            query: Query string
+
+        Returns:
+            Tuple of embedding values (hashable for caching)
+        """
+        embedding = self.embedding_model.encode([query])[0]
+        # Convert numpy array to tuple for hashability
+        return tuple(embedding.tolist())
+
+    def get_query_embedding(self, query: str) -> np.ndarray:
+        """
+        Get query embedding with LRU caching.
+
+        Args:
+            query: Query string
+
+        Returns:
+            Numpy array of embedding
+        """
+        cached_tuple = self._get_cached_embedding(query)
+        return np.array(cached_tuple)
+
     def clear_memory(self):
         """
         Xóa tất cả tài liệu từ database và reset tracking.
@@ -137,6 +177,14 @@ class Chatbot:
 
         # Clear tracking structures
         self.processed_files = set()
+
+        # Clear LRU cache
+        self._get_cached_embedding.cache_clear()
+        logger.info("LRU embedding cache cleared")
+
+        # Clear Redis cache
+        self.cache.invalidate_query_cache()
+        logger.info("Redis query cache cleared")
 
         logger.info("Chatbot database and tracking cleared")
         return (
@@ -296,6 +344,10 @@ class Chatbot:
             all_documents = document_service.get_all_processed_documents()
             total_chunks = sum(len(document_chunk_service.get_chunks_by_document(d.id)) for d in all_documents)
 
+            # Invalidate query cache since new documents were added
+            self.cache.invalidate_query_cache()
+            logger.info("Query cache invalidated after document upload")
+
             status_message = (
                 f"Xử lý thành công '{desired_filename}' ({file_type})!\n"
                 f"- Số chunks mới: {len(document_chunk_service.get_chunks_by_document(doc.id))}\n"
@@ -367,6 +419,10 @@ class Chatbot:
             # Remove from processed_files tracker
             self.processed_files.discard(filename)
 
+            # Invalidate query cache since documents were deleted
+            self.cache.invalidate_query_cache()
+            logger.info(f"Query cache invalidated after document deletion")
+
             logger.info(f"Deleted document '{filename}' from database")
             return True, f"Đã xóa tài liệu '{filename}' từ database."
 
@@ -426,8 +482,18 @@ class Chatbot:
             List of tuples (content, similarity_score, metadata)
         """
         try:
-            # Generate query embedding
-            query_embedding = self.embedding_model.encode([query])[0]
+            # Try to get cached results
+            cached_results = self.cache.get_query_results(query, top_k=top_k, search_type="text")
+            if cached_results is not None:
+                logger.info(f"Cache HIT for text search: {query[:50]}...")
+                # Convert from dict format back to tuple format
+                return [(r['content'], r['score'], r['metadata']) for r in cached_results]
+
+            # Cache miss - perform database search
+            logger.debug(f"Cache MISS for text search: {query[:50]}...")
+
+            # Generate query embedding with LRU cache
+            query_embedding = self.get_query_embedding(query)
 
             # Use database service with recency boost
             chunks_with_scores = document_chunk_service.find_similar_chunks_by_embedding(
@@ -450,10 +516,17 @@ class Chatbot:
                     'heading': chunk.heading or '',
                     'length': len(chunk.content),
                     'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
-                    'created_at': chunk.created_at
+                    'created_at': str(chunk.created_at) if chunk.created_at else None
                 }
 
                 results.append((chunk.content, score, metadata))
+
+            # Cache results for future queries
+            cache_data = [
+                {'content': content, 'score': score, 'metadata': metadata}
+                for content, score, metadata in results
+            ]
+            self.cache.set_query_results(query, cache_data, top_k=top_k, search_type="text", ttl=3600)
 
             return results
 
@@ -476,6 +549,16 @@ class Chatbot:
         try:
             if not self.vintern_service.is_enabled():
                 return []
+
+            # Try to get cached results
+            cached_results = self.cache.get_query_results(query, top_k=top_k, search_type="vintern")
+            if cached_results is not None:
+                logger.info(f"Cache HIT for Vintern search: {query[:50]}...")
+                # Convert from dict format back to tuple format
+                return [(r['content'], r['score'], r['metadata']) for r in cached_results]
+
+            # Cache miss - perform database search
+            logger.debug(f"Cache MISS for Vintern search: {query[:50]}...")
 
             # Chuẩn bị embedding cho query
             q_emb = self.vintern_service.process_query(query)
@@ -511,10 +594,17 @@ class Chatbot:
                     'heading': chunk.heading or '',
                     'content': chunk.content,
                     'preview': chunk.content[:150] + "..." if chunk.content and len(chunk.content) > 150 else chunk.content,
-                    'created_at': chunk.created_at
+                    'created_at': str(chunk.created_at) if chunk.created_at else None
                 }
 
                 results.append((context_text, score, metadata))
+
+            # Cache results for future queries
+            cache_data = [
+                {'content': content, 'score': score, 'metadata': metadata}
+                for content, score, metadata in results
+            ]
+            self.cache.set_query_results(query, cache_data, top_k=top_k, search_type="vintern", ttl=3600)
 
             return results
 

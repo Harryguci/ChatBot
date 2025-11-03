@@ -41,3 +41,9 @@ pgvector>=0.3.1  # PostgreSQL vector extension for embeddings
 
 sqlalchemy
 psycopg2
+
+# Caching
+redis>=5.0.0
+
+# Rate Limiting
+slowapi>=0.1.9

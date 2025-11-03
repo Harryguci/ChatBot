@@ -1,4 +1,4 @@
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends
+from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Request
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import List, Optional
@@ -7,9 +7,14 @@ import tempfile
 import logging
 from pathlib import Path
 import asyncio
+from slowapi import Limiter
+from slowapi.util import get_remote_address
 
 # Import the PDFChatbot class
 from ..chatbot_memory import Chatbot
+
+# Initialize rate limiter
+limiter = Limiter(key_func=get_remote_address)
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -84,7 +89,9 @@ async def get_chatbot() -> Chatbot:
     return chatbot_instance
 
 @router.post("/upload-document", response_model=ProcessPDFResponse)
+@limiter.limit("10/minute")
 async def upload_and_process_document(
+    request: Request,
     file: UploadFile = File(...),
     chatbot: Chatbot = Depends(get_chatbot)
 ):
@@ -141,7 +148,9 @@ async def upload_and_process_document(
         raise HTTPException(status_code=500, detail=f"Error processing document: {str(e)}")
 
 @router.post("/upload-pdf", response_model=ProcessPDFResponse)
+@limiter.limit("10/minute")
 async def upload_and_process_pdf(
+    request: Request,
     file: UploadFile = File(...),
     chatbot: Chatbot = Depends(get_chatbot)
 ):
@@ -191,7 +200,9 @@ async def upload_and_process_pdf(
         raise HTTPException(status_code=500, detail=f"Error processing PDF: {str(e)}")
 
 @router.post("/chat", response_model=ChatResponse)
+@limiter.limit("30/minute")
 async def chat_with_documents(
+    http_request: Request,
     request: ChatRequest,
     chatbot: Chatbot = Depends(get_chatbot)
 ):
