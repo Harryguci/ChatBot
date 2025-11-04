@@ -4,6 +4,11 @@ import logging
 import threading
 from typing import Optional
 
+# TODO: we want to use gpt2-vietnamese model instead of gemini model
+
+# from transformers import pipeline
+# pipe = pipeline("text-generation", model="NlpHUST/gpt2-vietnamese")
+
 try:
     import google.generativeai as genai
 except Exception:  # pragma: no cover - optional dependency

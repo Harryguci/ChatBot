@@ -15,8 +15,9 @@ from src.config.db.services import system_log_service
 # Load environment variables from .env file
 load_dotenv()
 
-# Import chatbot router
+# Import routers
 from src.routers.chatbot import router as chatbot_router
+from src.routers.auth import router as auth_router
 
 # Import database connection
 from src.config.db import get_database_connection, initialize_database
@@ -99,7 +100,8 @@ def health_check():
             "error": str(e)
         }
 
-# Include chatbot router AFTER other API endpoints
+# Include routers AFTER other API endpoints
+app.include_router(auth_router)
 app.include_router(chatbot_router)
 
 # Serve static assets from Vite build

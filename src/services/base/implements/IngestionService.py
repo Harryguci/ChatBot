@@ -2,7 +2,6 @@ from src.services.base.interfaces.IIngestionService import IIngestionService
 from src.services.base.interfaces.IDocumentProcessor import IDocumentProcessor
 from src.services.base.implements.PdfProcessor import PdfProcessor
 from src.services.base.implements.ImageProcessor import ImageProcessor
-from src.services.base.interfaces.GeminiModel import IGeminiModel, GeminiModel
 
 from pathlib import Path
 import logging
@@ -22,26 +21,15 @@ class IngestionService(IIngestionService):
     def __init__(
         self,
         processors: Optional[Dict[str, IDocumentProcessor]] = None,
-        gemini: Optional[IGeminiModel] = None,
     ) -> None:
-        # Allow DI for processors and Gemini
-        self._gemini = gemini
+        # Allow DI for processors
         self._processors: Dict[str, IDocumentProcessor] = processors or {}
 
         # Provide sensible defaults if not injected
         if '.pdf' not in self._processors:
             self._processors['.pdf'] = PdfProcessor()
-        # Image processor supports Gemini DI
         if 'image' not in self._processors:
-            self._processors['image'] = ImageProcessor(gemini=self._gemini or self._lazy_gemini())
-
-    def _lazy_gemini(self) -> IGeminiModel:
-        try:
-            return GeminiModel()
-        except Exception as e:
-            logger.warning("Gemini model unavailable: %s", str(e))
-            # ImageProcessor will still fall back to Tesseract
-            return None  # type: ignore[return-value]
+            self._processors['image'] = ImageProcessor()
 
     def process_document(self, file_path: str):
         """

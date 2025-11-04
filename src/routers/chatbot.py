@@ -13,6 +13,10 @@ from slowapi.util import get_remote_address
 # Import the PDFChatbot class
 from ..chatbot_memory import Chatbot
 
+# Import authentication dependencies
+from src.auth.dependencies import get_current_active_user, require_admin
+from src.config.db.models import User
+
 # Initialize rate limiter
 limiter = Limiter(key_func=get_remote_address)
 
@@ -93,7 +97,8 @@ async def get_chatbot() -> Chatbot:
 async def upload_and_process_document(
     request: Request,
     file: UploadFile = File(...),
-    chatbot: Chatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Upload and process a PDF file or image for the chatbot to use in answering questions.
@@ -152,7 +157,8 @@ async def upload_and_process_document(
 async def upload_and_process_pdf(
     request: Request,
     file: UploadFile = File(...),
-    chatbot: Chatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Upload and process a PDF file for the chatbot to use in answering questions.
@@ -204,7 +210,8 @@ async def upload_and_process_pdf(
 async def chat_with_documents(
     request: Request,
     body: ChatRequest,
-    chatbot: Chatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(get_current_active_user)
 ):
     """
     Ask a question about the uploaded documents and get an answer.
@@ -244,22 +251,25 @@ async def chat_with_documents(
         logger.error(f"Error generating answer: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
-@router.delete("/memory")
-async def clear_memory(chatbot: Chatbot = Depends(get_chatbot)):
-    """
-    Clear all uploaded documents and chat history from the chatbot's memory.
-    """
-    try:
-        chatbot.clear_memory()
-        return JSONResponse(
-            content={"message": "Memory cleared successfully", "status": "success"}
-        )
-    except Exception as e:
-        logger.error(f"Error clearing memory: {str(e)}")
-        raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
+# @router.delete("/memory")
+# async def clear_memory(chatbot: Chatbot = Depends(get_chatbot)):
+#     """
+#     Clear all uploaded documents and chat history from the chatbot's memory.
+#     """
+#     try:
+#         chatbot.clear_memory()
+#         return JSONResponse(
+#             content={"message": "Memory cleared successfully", "status": "success"}
+#         )
+#     except Exception as e:
+#         logger.error(f"Error clearing memory: {str(e)}")
+#         raise HTTPException(status_code=500, detail=f"Error clearing memory: {str(e)}")
 
 @router.get("/memory/status", response_model=MemoryStatus)
-async def get_memory_status(chatbot: Chatbot = Depends(get_chatbot)):
+async def get_memory_status(
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     Get the current status of the chatbot's memory (processed files, total chunks, etc.).
     """
@@ -315,7 +325,10 @@ async def health_check():
         )
 
 @router.get("/memorable-documents", response_model=DocumentsListResponse)
-async def list_documents(chatbot: Chatbot = Depends(get_chatbot)):
+async def list_documents(
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(get_current_active_user)
+):
     """
     Get the list of all processed documents with detailed information.
     """
@@ -330,7 +343,11 @@ async def list_documents(chatbot: Chatbot = Depends(get_chatbot)):
         raise HTTPException(status_code=500, detail=f"Error getting documents list: {str(e)}")
 
 @router.delete("/memorable-documents/{filename:path}")
-async def delete_document(filename: str, chatbot: Chatbot = Depends(get_chatbot)):
+async def delete_document(
+    filename: str,
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(require_admin)
+):
     """
     Delete a specific document from memory by filename.
     """

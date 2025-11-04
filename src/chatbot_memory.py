@@ -1,6 +1,6 @@
 import os
 from sentence_transformers import SentenceTransformer
-import google.generativeai as genai
+from transformers import pipeline
 from typing import List, Dict, Tuple
 import logging
 from pathlib import Path
@@ -12,7 +12,7 @@ import hashlib
 import numpy as np
 # Import database services
 from src.config.db.services import (
-    document_service, document_chunk_service, embedding_cache_service
+    document_service, document_chunk_service
 )
 from src.services.base.implements.IngestionService import IngestionService
 from src.services.base.implements.PdfIngestionPipeline import PdfIngestionPipeline
@@ -98,21 +98,26 @@ class Chatbot:
         """Thiết lập các model cần thiết"""
         try:
             logger.info(f"[setup_models] Starting model initialization...")
-            logger.info(f"API Key được sử dụng: {self.google_api_key[:10]}..." if self.google_api_key else "API Key không tồn tại")
-            genai.configure(api_key=self.google_api_key)
+            logger.info("Use local Vietnamese GPT-2 model: NlpHUST/gpt2-vietnamese")
 
-            # Use the working Gemini 2.0 Flash model
-            self.llm = genai.GenerativeModel('gemini-2.0-flash-exp')
-            logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-exp")
+            # Local Vietnamese GPT-2 text-generation pipeline
+            # Uses CPU or CUDA automatically via transformers/accelerate
+            self.llm = pipeline(
+                "text-generation",
+                model="NlpHUST/gpt2-vietnamese",
+                model_kwargs={"use_safetensors": True},
+                device_map="auto",
+            )
+            logger.info("✓ Successfully initialized local Vietnamese GPT-2 model: NlpHUST/gpt2-vietnamese")
 
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
-            logger.info("✓ Đã khởi tạo thành công embedding model")
+            logger.info("✓ Successfully initialized embedding model")
 
             # Vintern Multimodal Embedding Service (RAG hình ảnh + văn bản)
             # Only initialize if not already set (for async initialization)
             if not hasattr(self, 'vintern_service') or self.vintern_service is None:
                 self.vintern_service = VinternEmbeddingService()
-                logger.info("✓ Đã khởi tạo Vintern service")
+                logger.info("✓ Successfully initialized Vintern service")
             else:
                 logger.info("✓ Vintern service already initialized")
 
@@ -122,11 +127,11 @@ class Chatbot:
                 '.pdf': PdfIngestionPipeline(self.ingestion_service),
                 'image': ImageIngestionPipeline(self.ingestion_service, self.vintern_service),
             }
-            logger.info("✓ Đã khởi tạo ingestion pipelines")
+            logger.info("✓ Successfully initialized ingestion pipelines")
             logger.info("[setup_models] Model initialization completed")
 
         except Exception as e:
-            logger.error(f"Lỗi khởi tạo model: {str(e)}")
+            logger.error(f"Error initializing models: {str(e)}")
             raise
 
     @lru_cache(maxsize=1000)
@@ -158,42 +163,6 @@ class Chatbot:
         cached_tuple = self._get_cached_embedding(query)
         return np.array(cached_tuple)
 
-    def clear_memory(self):
-        """
-        Xóa tất cả tài liệu từ database và reset tracking.
-
-        Note: This clears the database, not just in-memory structures.
-        """
-        logger.info("Clearing all documents from database and tracker...")
-
-        # Clear all documents from database
-        try:
-            all_docs = document_service.get_all_processed_documents()
-            for doc in all_docs:
-                document_service.delete_document_by_filename(doc.filename)
-            logger.info(f"Deleted {len(all_docs)} documents from database")
-        except Exception as e:
-            logger.error(f"Error clearing database: {str(e)}")
-
-        # Clear tracking structures
-        self.processed_files = set()
-
-        # Clear LRU cache
-        self._get_cached_embedding.cache_clear()
-        logger.info("LRU embedding cache cleared")
-
-        # Clear Redis cache
-        self.cache.invalidate_query_cache()
-        logger.info("Redis query cache cleared")
-
-        logger.info("Chatbot database and tracking cleared")
-        return (
-            [],  # Xóa lịch sử chat
-            "",  # Xóa text box câu hỏi
-            "Sẵn sàng xử lý file mới...",  # Reset status
-            "Chưa có tài liệu nào được xử lý."  # Reset danh sách file
-        )
-    
     def load_documents_from_database(self):
         """
         Load document metadata from database on startup.
@@ -678,8 +647,15 @@ class Chatbot:
             --- CÂU TRẢ LỜI CÔ ĐỌNG VÀ CHÍNH XÁC ---
             """
 
-            response = self.llm.generate_content(prompt)
-            answer = response.text
+            gen_outputs = self.llm(
+                prompt,
+                max_new_tokens=256,
+                do_sample=True,
+                temperature=0.8,
+                top_p=0.95,
+                pad_token_id=self.llm.tokenizer.eos_token_id if hasattr(self.llm, "tokenizer") and self.llm.tokenizer.eos_token_id is not None else None,
+            )
+            answer = gen_outputs[0]["generated_text"]
 
             confidence_score = combined[0][1]
             confidence_info = f"<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: {confidence_score:.2%}*</span>"
