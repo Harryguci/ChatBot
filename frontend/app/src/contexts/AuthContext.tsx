@@ -1,5 +1,6 @@
-import React, { createContext, useContext, useState, useEffect } from "react";
 import axios from "axios";
+import React, { createContext, useContext, useEffect, useState } from "react";
+import { API_BASE_URL } from "../../config/const";
 
 interface User {
   id: number;
@@ -33,6 +34,33 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
   const [token, setToken] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(true);
 
+  // Setup axios interceptor for 401 errors
+  useEffect(() => {
+    const interceptor = axios.interceptors.response.use(
+      (response) => response,
+      (error) => {
+        if (error.response?.status === 401) {
+          // Clear invalid token
+          localStorage.removeItem("auth_token");
+          localStorage.removeItem("auth_user");
+          setToken(null);
+          setUser(null);
+          delete axios.defaults.headers.common["Authorization"];
+
+          // Redirect to login if not already there
+          if (window.location.pathname !== "/login") {
+            window.location.href = "/login";
+          }
+        }
+        return Promise.reject(error);
+      }
+    );
+
+    return () => {
+      axios.interceptors.response.eject(interceptor);
+    };
+  }, []);
+
   // Initialize auth state from localStorage
   useEffect(() => {
     const storedToken = localStorage.getItem("auth_token");
@@ -60,7 +88,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
 
   const login = async (googleToken: string) => {
     try {
-      const response = await axios.post("/api/auth/google", {
+      const response = await axios.post(`${API_BASE_URL}/auth/google`, {
         token: googleToken,
       });
 
@@ -78,11 +106,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({
       axios.defaults.headers.common["Authorization"] = `Bearer ${access_token}`;
 
       console.log("Login successful:", userData);
-    } catch (error: any) {
+    } catch (error) {
       console.error("Login failed:", error);
-      throw new Error(
-        error.response?.data?.detail || "Authentication failed"
-      );
+      if (axios.isAxiosError(error) && error.response?.data?.detail) {
+        throw new Error(error.response.data.detail);
+      }
+      throw new Error("Authentication failed");
     }
   };
 

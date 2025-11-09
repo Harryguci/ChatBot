@@ -6,9 +6,11 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from google.oauth2 import id_token
 from google.auth.transport import requests as google_requests
+from google.auth.exceptions import GoogleAuthError
 from datetime import datetime
 import os
 import logging
+import traceback
 
 from src.auth.schemas import GoogleAuthRequest, TokenResponse, UserResponse, MessageResponse
 from src.auth.jwt_utils import create_access_token
@@ -49,17 +51,35 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
     try:
         # Verify Google token
         if not GOOGLE_CLIENT_ID:
+            logger.error("GOOGLE_CLIENT_ID environment variable is not set")
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail="Google OAuth not configured. Set GOOGLE_CLIENT_ID in environment."
             )
 
         # Verify the token with Google
-        idinfo = id_token.verify_oauth2_token(
-            body.token,
-            google_requests.Request(),
-            GOOGLE_CLIENT_ID
-        )
+        try:
+            idinfo = id_token.verify_oauth2_token(
+                body.token,
+                google_requests.Request(),
+                GOOGLE_CLIENT_ID
+            )
+        except ValueError as e:
+            # Token verification failed (invalid token, expired, wrong audience, etc.)
+            logger.error(f"Google token verification failed: {str(e)}")
+            logger.error(f"Token verification error details: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Invalid Google token: {str(e)}"
+            )
+        except GoogleAuthError as e:
+            # Google Auth library errors
+            logger.error(f"Google Auth error: {str(e)}")
+            logger.error(f"Google Auth error details: {traceback.format_exc()}")
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail=f"Google authentication error: {str(e)}"
+            )
 
         # Extract user information from Google token
         google_id = idinfo.get("sub")
@@ -69,9 +89,10 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
         email_verified = idinfo.get("email_verified", False)
 
         if not google_id or not email:
+            logger.error(f"Token missing required fields: google_id={google_id}, email={email}")
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid Google token: missing required fields"
+                detail="Invalid Google token: missing required fields (sub or email)"
             )
 
         # Check if user already exists
@@ -119,12 +140,15 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
                 )
                 db.add(user)
 
-        db.commit()
+        # Note: The database session is managed by the dependency's context manager
+        # which will automatically commit on success or rollback on exception
+        # No need to manually commit/rollback here
         db.refresh(user)
 
         # Create JWT access token
+        # Note: 'sub' (subject) must be a string according to JWT spec
         access_token = create_access_token(
-            data={"sub": user.id, "email": user.email, "role": user.role}
+            data={"sub": str(user.id), "email": user.email, "role": user.role}
         )
 
         logger.info(f"User {user.email} authenticated successfully (role: {user.role})")
@@ -133,18 +157,16 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
         return TokenResponse(
             access_token=access_token,
             token_type="bearer",
-            user=UserResponse.from_orm(user)
+            user=UserResponse.model_validate(user)
         )
 
-    except ValueError as e:
-        # Token verification failed
-        logger.error(f"Google token verification failed: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid Google token"
-        )
+    except HTTPException:
+        # Re-raise HTTP exceptions as-is
+        raise
     except Exception as e:
-        logger.error(f"Authentication error: {str(e)}")
+        # Catch any other unexpected errors
+        logger.error(f"Unexpected authentication error: {str(e)}")
+        logger.error(f"Error details: {traceback.format_exc()}")
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Authentication failed: {str(e)}"
@@ -164,7 +186,7 @@ async def get_current_user_info(
     Returns:
         UserResponse with user information
     """
-    return UserResponse.from_orm(current_user)
+    return UserResponse.model_validate(current_user)
 
 
 @router.post("/logout", response_model=MessageResponse)
@@ -201,7 +223,7 @@ async def list_users(
         List of all users
     """
     users = db.query(User).all()
-    return [UserResponse.from_orm(user) for user in users]
+    return [UserResponse.model_validate(user) for user in users]
 
 
 @router.put("/admin/users/{user_id}/role", response_model=UserResponse)
@@ -241,9 +263,9 @@ async def update_user_role(
 
     user.role = role
     user.updated_at = datetime.utcnow()
-    db.commit()
+    # Note: Commit is handled automatically by the session context manager
     db.refresh(user)
 
     logger.info(f"Admin {admin_user.email} changed role of user {user.email} to {role}")
 
-    return UserResponse.from_orm(user)
+    return UserResponse.model_validate(user)

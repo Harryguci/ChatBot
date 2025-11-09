@@ -102,10 +102,11 @@ class Chatbot:
 
             # Local Vietnamese GPT-2 text-generation pipeline
             # Uses CPU or CUDA automatically via transformers/accelerate
+            # Note: This model doesn't support safetensors, so we use pytorch format
             self.llm = pipeline(
                 "text-generation",
                 model="NlpHUST/gpt2-vietnamese",
-                model_kwargs={"use_safetensors": True},
+                model_kwargs={"use_safetensors": False},
                 device_map="auto",
             )
             logger.info("✓ Successfully initialized local Vietnamese GPT-2 model: NlpHUST/gpt2-vietnamese")

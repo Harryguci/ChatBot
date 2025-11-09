@@ -1,7 +1,7 @@
+import { GoogleLogin, type CredentialResponse } from "@react-oauth/google";
+import { Card, Space, Typography, message } from "antd";
 import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
-import { Card, Typography, message, Space } from "antd";
-import { GoogleLogin, CredentialResponse } from "@react-oauth/google";
 import { useAuth } from "../contexts/AuthContext";
 
 const { Title, Text } = Typography;
@@ -17,7 +17,9 @@ const LoginPage = () => {
     }
   }, [isAuthenticated, navigate]);
 
-  const handleGoogleSuccess = async (credentialResponse: CredentialResponse) => {
+  const handleGoogleSuccess = async (
+    credentialResponse: CredentialResponse
+  ) => {
     try {
       if (!credentialResponse.credential) {
         throw new Error("No credential received from Google");
@@ -26,9 +28,13 @@ const LoginPage = () => {
       await login(credentialResponse.credential);
       message.success("Login successful!");
       navigate("/", { replace: true });
-    } catch (error: any) {
+    } catch (error: unknown) {
       console.error("Login error:", error);
-      message.error(error.message || "Login failed. Please try again.");
+      message.error(
+        error instanceof Error
+          ? error.message
+          : "Login failed. Please try again."
+      );
     }
   };
 

@@ -105,11 +105,18 @@ class DatabaseConnection:
     @contextmanager
     def get_session(self) -> Generator[Session, None, None]:
         """Get database session with automatic cleanup."""
+        from fastapi import HTTPException
         session = self.SessionLocal()
         try:
             yield session
             session.commit()
+        except HTTPException:
+            # HTTPExceptions are not database errors - don't rollback
+            # They represent valid HTTP error responses
+            session.rollback()
+            raise
         except Exception as e:
+            # Only rollback on actual database/application errors
             session.rollback()
             logger.error(f"Database session error: {str(e)}")
             raise

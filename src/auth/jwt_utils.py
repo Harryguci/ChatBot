@@ -51,10 +51,23 @@ def decode_access_token(token: str) -> Optional[Dict[str, Any]]:
     Returns:
         Dictionary containing token payload if valid, None otherwise
     """
+    import logging
+    logger = logging.getLogger(__name__)
+    
     try:
         payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
         return payload
-    except JWTError:
+    except JWTError as e:
+        # JWT errors (expired, invalid signature, wrong algorithm, etc.)
+        error_msg = str(e)
+        if "expired" in error_msg.lower() or "exp" in error_msg.lower():
+            logger.warning("Token has expired")
+        else:
+            logger.warning(f"Invalid token: {error_msg}")
+        return None
+    except Exception as e:
+        # Unexpected errors
+        logger.error(f"Unexpected error decoding token: {str(e)}")
         return None
 
 

@@ -1,12 +1,13 @@
+name: chatbot-stack
 services:
   # PostgreSQL Database with pgvector extension
   postgres:
     image: pgvector/pgvector:pg15
     container_name: chatbot-postgres
     environment:
-      POSTGRES_DB: ${DB_NAME:-chatbot_db}
-      POSTGRES_USER: ${DB_USER:-postgres}
-      POSTGRES_PASSWORD: ${DB_PASSWORD:-postgres}
+      POSTGRES_DB: CHATBOT_OCR_DB
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: 123456
     ports:
       - "${DB_PORT:-5432}:5432"
     volumes:
@@ -48,68 +49,68 @@ services:
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
 
   # Backend FastAPI service
-  backend:
-    build:
-      context: ..
-      dockerfile: DockerFile
-    container_name: chatbot-backend
-    ports:
-      - "8000:8000"
-    environment:
-      - PYTHONPATH=/app/src
-      - ENVIRONMENT=production
-      # Database Configuration
-      - DB_HOST=postgres
-      - DB_PORT=5432
-      - DB_NAME=${DB_NAME:-chatbot_db}
-      - DB_USER=${DB_USER:-postgres}
-      - DB_PASSWORD=${DB_PASSWORD:-postgres}
-      # Phase 1 Optimization: Database Pool (30 → 150)
-      - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
-      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
-      - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-60}
-      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
-      # Phase 1 Optimization: Redis Cache
-      - REDIS_ENABLED=${REDIS_ENABLED:-true}
-      - REDIS_HOST=redis
-      - REDIS_PORT=6379
-      - REDIS_DB=${REDIS_DB:-0}
-      - REDIS_PASSWORD=${REDIS_PASSWORD:-}
-      # Google API Key
-      - GOOGLE_API_KEY=${GOOGLE_API_KEY}
-    volumes:
-      - ../src:/app/src:ro
-      - ../frontend/release:/app/frontend/release:ro
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    networks:
-      - chatbot-network
+  # backend:
+  #   build:
+  #     context: ..
+  #     dockerfile: DockerFile
+  #   container_name: chatbot-backend
+  #   ports:
+  #     - "8000:8000"
+  #   environment:
+  #     - PYTHONPATH=/app/src
+  #     - ENVIRONMENT=production
+  #     # Database Configuration
+  #     - DB_HOST=postgres
+  #     - DB_PORT=5432
+  #     - DB_NAME=${DB_NAME:-chatbot_db}
+  #     - DB_USER=${DB_USER:-postgres}
+  #     - DB_PASSWORD=${DB_PASSWORD:-postgres}
+  #     # Phase 1 Optimization: Database Pool (30 → 150)
+  #     - DB_POOL_SIZE=${DB_POOL_SIZE:-50}
+  #     - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-100}
+  #     - DB_POOL_TIMEOUT=${DB_POOL_TIMEOUT:-60}
+  #     - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
+  #     # Phase 1 Optimization: Redis Cache
+  #     - REDIS_ENABLED=${REDIS_ENABLED:-true}
+  #     - REDIS_HOST=redis
+  #     - REDIS_PORT=6379
+  #     - REDIS_DB=${REDIS_DB:-0}
+  #     - REDIS_PASSWORD=${REDIS_PASSWORD:-}
+  #     # Google API Key
+  #     - GOOGLE_API_KEY=${GOOGLE_API_KEY}
+  #   volumes:
+  #     - ../src:/app/src:ro
+  #     - ../frontend/release:/app/frontend/release:ro
+  #   depends_on:
+  #     postgres:
+  #       condition: service_healthy
+  #     redis:
+  #       condition: service_healthy
+  #   restart: unless-stopped
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 40s
+  #   networks:
+  #     - chatbot-network
 
   # Frontend React service (optional - for development)
-  frontend-dev:
-    build:
-      context: ../frontend
-      dockerfile: DockerFile
-    container_name: chatbot-frontend-dev
-    ports:
-      - "3000:80"
-    depends_on:
-      - backend
-    restart: unless-stopped
-    networks:
-      - chatbot-network
-    profiles:
-      - dev
+  # frontend-dev:
+  #   build:
+  #     context: ../frontend
+  #     dockerfile: DockerFile
+  #   container_name: chatbot-frontend-dev
+  #   ports:
+  #     - "3000:80"
+  #   depends_on:
+  #     - backend
+  #   restart: unless-stopped
+  #   networks:
+  #     - chatbot-network
+  #   profiles:
+  #     - dev
 
   # Nginx reverse proxy (optional - for production)
   # nginx:

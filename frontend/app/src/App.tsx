@@ -9,11 +9,12 @@ import {
   useLocation,
 } from "react-router-dom";
 import "./App.css";
-import { AuthProvider } from "./contexts/AuthContext";
 import { ProtectedRoute } from "./components/ProtectedRoute";
-import LoginPage from "./pages/LoginPage";
+import { AuthProvider } from "./contexts/AuthContext";
 import AdminLayout from "./layouts/AdminLayout";
 import ChatBotPage from "./pages/ChatBotPage";
+import LoginPage from "./pages/LoginPage";
+import AccountPage from "./pages/admin/AccountPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import DocumentManagementPage from "./pages/admin/DocumentManagementPage";
 
@@ -23,6 +24,7 @@ const routeTitles: Record<string, string> = {
   "/login": "Login",
   "/admin/dashboard": "Admin Dashboard",
   "/admin/documents": "Document Management",
+  "/admin/account": "Account Settings",
 };
 
 function DocumentTitle() {
@@ -47,22 +49,8 @@ function App() {
             <Route path="/login" element={<LoginPage />} />
 
             {/* Protected Chat Bot Page (User) */}
-            <Route
-              path="/"
-              element={
-                <ProtectedRoute>
-                  <ChatBotPage />
-                </ProtectedRoute>
-              }
-            />
-            <Route
-              path="/chat"
-              element={
-                <ProtectedRoute>
-                  <ChatBotPage />
-                </ProtectedRoute>
-              }
-            />
+            <Route path="/" element={<ChatBotPage />} />
+            <Route path="/chat" element={<ChatBotPage />} />
 
             {/* Protected Admin Pages */}
             <Route
@@ -81,6 +69,7 @@ function App() {
               />
               <Route path="dashboard" element={<DashboardPage />} />
               <Route path="documents" element={<DocumentManagementPage />} />
+              <Route path="account" element={<AccountPage />} />
             </Route>
 
             {/* 404 - Redirect to chat */}

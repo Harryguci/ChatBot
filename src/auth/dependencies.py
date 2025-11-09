@@ -2,6 +2,7 @@
 FastAPI dependencies for authentication and authorization.
 """
 
+import logging
 from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from typing import Optional
@@ -11,14 +12,17 @@ from .jwt_utils import decode_access_token
 from src.config.db import get_database_connection
 from src.config.db.models import User
 
+logger = logging.getLogger(__name__)
+
 # Security scheme for JWT token
 security = HTTPBearer()
 
 
 def get_db():
-    """Get database connection."""
+    """Get database session as FastAPI dependency."""
     db = get_database_connection()
-    return db.get_session()
+    with db.get_session() as session:
+        yield session
 
 
 async def get_current_user(
@@ -45,20 +49,48 @@ async def get_current_user(
     )
 
     token = credentials.credentials
+    
+    # Validate token is not empty
+    if not token or not token.strip():
+        logger.warning("Empty token provided")
+        raise credentials_exception
+    
     payload = decode_access_token(token)
 
     if payload is None:
+        # Token is invalid, expired, or cannot be decoded
+        # This could be due to:
+        # 1. Token expired
+        # 2. Invalid signature (JWT_SECRET_KEY mismatch)
+        # 3. Invalid token format
+        # 4. Token was created with different secret key
+        logger.warning(f"Token validation failed for token: {token[:20]}...")
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid or expired token. Please login again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    user_id_str: Optional[str] = payload.get("sub")
+    if user_id_str is None:
         raise credentials_exception
 
-    user_id: Optional[int] = payload.get("sub")
-    if user_id is None:
+    # Convert user_id to int (JWT 'sub' is stored as string)
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
+        logger.error(f"Invalid user ID format in token: {user_id_str}")
         raise credentials_exception
 
     # Query user from database
     user = db.query(User).filter(User.id == user_id).first()
 
     if user is None:
-        raise credentials_exception
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="User not found. Please login again.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
 
     return user
 
@@ -133,8 +165,14 @@ async def get_optional_user(
     if payload is None:
         return None
 
-    user_id: Optional[int] = payload.get("sub")
-    if user_id is None:
+    user_id_str: Optional[str] = payload.get("sub")
+    if user_id_str is None:
+        return None
+
+    # Convert user_id to int (JWT 'sub' is stored as string)
+    try:
+        user_id = int(user_id_str)
+    except (ValueError, TypeError):
         return None
 
     user = db.query(User).filter(User.id == user_id).first()

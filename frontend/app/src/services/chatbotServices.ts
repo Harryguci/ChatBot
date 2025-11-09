@@ -1,4 +1,4 @@
-import { API_BASE_URL } from '../../config/const';
+import { API_BASE_URL } from "../../config/const";
 
 // TypeScript interfaces for API responses
 interface HealthResponse {
@@ -60,17 +60,55 @@ interface ApiError {
 // Base configuration
 const CHATBOT_API_BASE_URL = `${API_BASE_URL}/chatbot`;
 
+// Utility function to get auth token from localStorage
+const getAuthToken = (): string | null => {
+  return localStorage.getItem("auth_token");
+};
+
+// Utility function to create headers with authentication
+const getAuthHeaders = (includeContentType: boolean = false): HeadersInit => {
+  const headers: HeadersInit = {};
+  const token = getAuthToken();
+
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
+  }
+
+  if (includeContentType) {
+    headers["Content-Type"] = "application/json";
+  }
+
+  return headers;
+};
+
 // Utility function for error handling
 const handleApiError = async (response: Response): Promise<never> => {
-  let errorMessage = 'An unexpected error occurred';
-  
+  let errorMessage = "An unexpected error occurred";
+
   try {
     const errorData: ApiError = await response.json();
-    errorMessage = errorData.detail;
+    errorMessage = errorData.detail || errorMessage;
   } catch {
     errorMessage = `HTTP ${response.status}: ${response.statusText}`;
   }
-  
+
+  // Handle authentication errors (401)
+  if (response.status === 401) {
+    // Clear invalid token from localStorage
+    localStorage.removeItem("auth_token");
+    localStorage.removeItem("auth_user");
+
+    // Redirect to login page if we're in a browser environment
+    if (typeof window !== "undefined") {
+      // Only redirect if not already on login page
+      if (window.location.pathname !== "/login") {
+        window.location.href = "/login";
+      }
+    }
+
+    throw new Error("Authentication failed. Please login again.");
+  }
+
   throw new Error(errorMessage);
 };
 
@@ -82,14 +120,18 @@ const chatbotServices = {
   async checkHealth(): Promise<HealthResponse> {
     try {
       const response = await fetch(`${CHATBOT_API_BASE_URL}/health`);
-      
+
       if (!response.ok) {
         await handleApiError(response);
       }
-      
+
       return await response.json();
     } catch (error) {
-      throw new Error(`Health check failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Health check failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -102,25 +144,34 @@ const chatbotServices = {
     try {
       // Validate file type
       const supportedTypes = [
-        'application/pdf',
-        'image/jpeg',
-        'image/jpg', 
-        'image/png',
-        'image/bmp',
-        'image/gif',
-        'image/tiff',
-        'image/webp'
+        "application/pdf",
+        "image/jpeg",
+        "image/jpg",
+        "image/png",
+        "image/bmp",
+        "image/gif",
+        "image/tiff",
+        "image/webp",
       ];
 
       if (!supportedTypes.includes(file.type)) {
-        throw new Error('Unsupported file type. Supported formats: PDF, JPG, PNG, BMP, GIF, TIFF, WEBP');
+        throw new Error(
+          "Unsupported file type. Supported formats: PDF, JPG, PNG, BMP, GIF, TIFF, WEBP"
+        );
       }
 
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append("file", file);
+
+      const token = getAuthToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/upload-document`, {
-        method: 'POST',
+        method: "POST",
+        headers: headers,
         body: formData,
       });
 
@@ -130,7 +181,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Document upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Document upload failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -142,15 +197,24 @@ const chatbotServices = {
   async uploadPDF(file: File): Promise<ProcessPDFResponse> {
     try {
       // Validate file type
-      if (file.type !== 'application/pdf') {
-        throw new Error('Only PDF files are supported for this endpoint. Use uploadDocument for images.');
+      if (file.type !== "application/pdf") {
+        throw new Error(
+          "Only PDF files are supported for this endpoint. Use uploadDocument for images."
+        );
       }
 
       const formData = new FormData();
-      formData.append('file', file);
+      formData.append("file", file);
+
+      const token = getAuthToken();
+      const headers: HeadersInit = {};
+      if (token) {
+        headers["Authorization"] = `Bearer ${token}`;
+      }
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/upload-pdf`, {
-        method: 'POST',
+        method: "POST",
+        headers: headers,
         body: formData,
       });
 
@@ -160,7 +224,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`PDF upload failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `PDF upload failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -170,10 +238,13 @@ const chatbotServices = {
    * @param chatHistory - Optional chat history for context
    * @returns Promise<ChatResponse>
    */
-  async chat(query: string, chatHistory: [string, string][] = []): Promise<ChatResponse> {
+  async chat(
+    query: string,
+    chatHistory: [string, string][] = []
+  ): Promise<ChatResponse> {
     try {
       if (!query.trim()) {
-        throw new Error('Query cannot be empty');
+        throw new Error("Query cannot be empty");
       }
 
       const requestBody: ChatRequest = {
@@ -182,10 +253,8 @@ const chatbotServices = {
       };
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/chat`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        method: "POST",
+        headers: getAuthHeaders(true),
         body: JSON.stringify(requestBody),
       });
 
@@ -195,7 +264,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Chat request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Chat request failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -205,7 +278,9 @@ const chatbotServices = {
    */
   async getMemoryStatus(): Promise<MemoryStatus> {
     try {
-      const response = await fetch(`${CHATBOT_API_BASE_URL}/memory/status`);
+      const response = await fetch(`${CHATBOT_API_BASE_URL}/memory/status`, {
+        headers: getAuthHeaders(),
+      });
 
       if (!response.ok) {
         await handleApiError(response);
@@ -213,7 +288,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Memory status request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Memory status request failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -224,7 +303,8 @@ const chatbotServices = {
   async clearMemory(): Promise<ClearMemoryResponse> {
     try {
       const response = await fetch(`${CHATBOT_API_BASE_URL}/memory`, {
-        method: 'DELETE',
+        method: "DELETE",
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -233,7 +313,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Clear memory request failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Clear memory request failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -244,15 +328,15 @@ const chatbotServices = {
    */
   getConfidenceLevel(confidence?: number): string {
     if (confidence === undefined || confidence === null) {
-      return 'Unknown';
+      return "Unknown";
     }
-    
+
     if (confidence < 0.4) {
-      return 'Low (may not be closely related)';
+      return "Low (may not be closely related)";
     } else if (confidence <= 0.65) {
-      return 'Medium';
+      return "Medium";
     } else {
-      return 'High';
+      return "High";
     }
   },
 
@@ -263,9 +347,9 @@ const chatbotServices = {
    */
   formatConfidence(confidence?: number): string {
     if (confidence === undefined || confidence === null) {
-      return 'N/A';
+      return "N/A";
     }
-    
+
     return `${Math.round(confidence * 100)}%`;
   },
 
@@ -275,7 +359,12 @@ const chatbotServices = {
    */
   async getDocuments(): Promise<DocumentsListResponse> {
     try {
-      const response = await fetch(`${CHATBOT_API_BASE_URL}/memorable-documents`);
+      const response = await fetch(
+        `${CHATBOT_API_BASE_URL}/memorable-documents`,
+        {
+          headers: getAuthHeaders(),
+        }
+      );
 
       if (!response.ok) {
         await handleApiError(response);
@@ -283,7 +372,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Get documents failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Get documents failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 
@@ -295,15 +388,19 @@ const chatbotServices = {
   async deleteDocument(filename: string): Promise<DeleteDocumentResponse> {
     try {
       if (!filename.trim()) {
-        throw new Error('Filename cannot be empty');
+        throw new Error("Filename cannot be empty");
       }
 
       // URL encode the filename to handle special characters
       const encodedFilename = encodeURIComponent(filename);
 
-      const response = await fetch(`${CHATBOT_API_BASE_URL}/memorable-documents/${encodedFilename}`, {
-        method: 'DELETE',
-      });
+      const response = await fetch(
+        `${CHATBOT_API_BASE_URL}/memorable-documents/${encodedFilename}`,
+        {
+          method: "DELETE",
+          headers: getAuthHeaders(),
+        }
+      );
 
       if (!response.ok) {
         await handleApiError(response);
@@ -311,7 +408,11 @@ const chatbotServices = {
 
       return await response.json();
     } catch (error) {
-      throw new Error(`Delete document failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
+      throw new Error(
+        `Delete document failed: ${
+          error instanceof Error ? error.message : "Unknown error"
+        }`
+      );
     }
   },
 };
@@ -320,14 +421,14 @@ export default chatbotServices;
 
 // Export types for use in other components
 export type {
-  HealthResponse,
-  ProcessPDFResponse,
-  ChatResponse,
-  MemoryStatus,
-  ClearMemoryResponse,
+  ApiError,
   ChatRequest,
+  ChatResponse,
+  ClearMemoryResponse,
+  DeleteDocumentResponse,
   DocumentInfo,
   DocumentsListResponse,
-  DeleteDocumentResponse,
-  ApiError,
+  HealthResponse,
+  MemoryStatus,
+  ProcessPDFResponse,
 };
