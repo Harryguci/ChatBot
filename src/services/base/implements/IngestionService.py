@@ -6,10 +6,19 @@ from src.services.base.interfaces.GeminiModel import IGeminiModel, GeminiModel
 
 from pathlib import Path
 import logging
+import os
 from typing import Dict, Optional
 
 
 logger = logging.getLogger(__name__)
+
+# Import enhanced processors with fallback
+try:
+    from src.services.base.implements.EnhancedPdfProcessor import EnhancedPdfProcessor
+    ENHANCED_PDF_AVAILABLE = True
+except ImportError:
+    logger.warning("EnhancedPdfProcessor not available, using standard PdfProcessor")
+    ENHANCED_PDF_AVAILABLE = False
 
 
 class IngestionService(IIngestionService):
@@ -23,14 +32,25 @@ class IngestionService(IIngestionService):
         self,
         processors: Optional[Dict[str, IDocumentProcessor]] = None,
         gemini: Optional[IGeminiModel] = None,
+        use_enhanced_pdf: bool = None,
     ) -> None:
         # Allow DI for processors and Gemini
         self._gemini = gemini
         self._processors: Dict[str, IDocumentProcessor] = processors or {}
 
+        # Determine whether to use enhanced PDF processor
+        if use_enhanced_pdf is None:
+            use_enhanced_pdf = os.getenv('USE_ENHANCED_PDF_PROCESSOR', 'true').lower() == 'true'
+
         # Provide sensible defaults if not injected
         if '.pdf' not in self._processors:
-            self._processors['.pdf'] = PdfProcessor()
+            if use_enhanced_pdf and ENHANCED_PDF_AVAILABLE:
+                logger.info("Using EnhancedPdfProcessor with OCR support")
+                self._processors['.pdf'] = EnhancedPdfProcessor()
+            else:
+                logger.info("Using standard PdfProcessor")
+                self._processors['.pdf'] = PdfProcessor()
+
         # Image processor supports Gemini DI
         if 'image' not in self._processors:
             self._processors['image'] = ImageProcessor(gemini=self._gemini or self._lazy_gemini())

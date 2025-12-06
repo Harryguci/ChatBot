@@ -10,13 +10,21 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # Set work directory
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including Tesseract OCR
 RUN apt-get update && apt-get install -y \
     gcc \
     g++ \
     libffi-dev \
     libssl-dev \
+    tesseract-ocr \
+    tesseract-ocr-eng \
+    tesseract-ocr-vie \
+    libtesseract-dev \
+    curl \
     && rm -rf /var/lib/apt/lists/*
+
+# Set Tesseract environment variable
+ENV TESSDATA_PREFIX=/usr/share/tesseract-ocr/4.00/tessdata
 
 # Copy requirements first for better caching
 COPY requirements.txt .

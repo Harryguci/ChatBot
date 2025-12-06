@@ -15,7 +15,7 @@ class ImageProcessor(IDocumentProcessor):
     Attempts Gemini Vision first when configured; falls back to Tesseract OCR.
     """
 
-    GEMINI_MODEL = 'gemini-2.0-flash-exp'
+    GEMINI_MODEL = 'gemini-2.0-flash-lite'
 
     def __init__(self, gemini: IGeminiModel | None = None):
         self._gemini: IGeminiModel | None = gemini

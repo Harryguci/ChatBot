@@ -1,0 +1,26 @@
+// Enhanced TypeScript interfaces to support RAG v2.0 features
+
+interface DocumentInfo {
+  filename: string;
+  file_type: string;
+  chunks_count: number;
+  heading: string;
+  preview: string;
+  file_size?: number;         // NEW: File size in bytes
+  created_at?: string;        // NEW: ISO timestamp
+  status?: string;            // NEW: Processing status (pending, processed, failed)
+}
+
+// Rest of the file remains the same, just update the DocumentInfo export
+export type {
+  HealthResponse,
+  ProcessPDFResponse,
+  ChatResponse,
+  MemoryStatus,
+  ClearMemoryResponse,
+  ChatRequest,
+  DocumentInfo,  // Updated type
+  DocumentsListResponse,
+  DeleteDocumentResponse,
+  ApiError,
+};

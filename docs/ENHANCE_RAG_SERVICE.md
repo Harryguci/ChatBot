@@ -1,0 +1,45 @@
+### **Project Overview**
+
+The project, titled **"System for Q\&A on PDF Documents,"** is a Retrieval-Augmented Generation (RAG) chatbot designed to ingest, analyze, and answer questions from multiple PDF files. Its primary distinction is the ability to handle both standard digital PDFs and **scanned image PDFs** (via OCR) while prioritizing recent information through date-based filtering.
+
+### **1. Technology Stack**
+
+The system is built using Python (specifically Python 3.10 recommended) and integrates several key libraries for processing and AI:
+
+- **PDF Processing:** `PyMuPDF (fitz)` is used for high-speed text extraction and rendering PDF pages as images for OCR.
+- **OCR (Optical Character Recognition):** `Tesseract OCR` (combined with `Pillow`) is used to extract text from scanned documents or pages with low text density (\<150 characters).
+- **Orchestration Framework:** `LangChain` manages the RAG pipeline, including text splitting and retrieval chains.
+- **Embeddings:** `HuggingFace Embeddings` using the `sentence-transformers/all-MiniLM-L6-v2` model to convert text into 384-dimensional vectors.
+- **Vector Database:** `FAISS` (Facebook AI Similarity Search) is used for efficient local storage and similarity search of document vectors.
+- **Large Language Model (LLM):** `Gemini 2.0 Flash Lite` (accessed via Google GenAI API) serves as the reasoning engine to generate answers.
+- **User Interface:** `Gradio` provides the web-based UI for uploading files and chatting.
+
+### **2. Data Flow Architecture**
+
+The system follows a linear pipeline from data ingestion to answer generation:
+
+1.  **Ingestion & Pre-processing:**
+    - The user uploads multiple PDF files.
+    - The system checks each page; if it contains sufficient text, it extracts it directly.
+    - If a page is an image (scanned), it converts the page to an image (300 DPI) and processes it with Tesseract (supporting Vietnamese + English).
+2.  **Chunking & Indexing:**
+    - Text is split into chunks of 1500 characters with a 200-character overlap using `RecursiveCharacterTextSplitter`.
+    - Chunks are embedded into vectors and stored in FAISS with metadata (filename and upload date).
+3.  **Retrieval (RAG):**
+    - When a user asks a question, the system uses `MultiQueryRetriever` to generate multiple variations of the query for better coverage.
+    - FAISS retrieves the top 8 most relevant text chunks.
+    - _(Optional)_ The system can filter results to prioritize or restrict documents based on the upload date.
+4.  **Generation:**
+    - The retrieved context and the user's question are sent to the **Gemini 2.0 Flash Lite** model.
+    - The model generates a concise answer citing the specific source documents.
+
+### **3. Use Cases & Experiments**
+
+The report details specific testing scenarios demonstrating the system's capabilities:
+
+- **Academic Support:** Summarizing complex assignments, such as a "Big Data Storage and Processing" task involving Hadoop ecosystems (HDFS, Hive, Sqoop, Oozie).
+- **Biology/Education:** Answering specific curriculum questions, such as the "Tasks of Human Body and Hygiene" subject, by extracting information from scanned textbooks.
+- **Administrative/Business:** Extracting specific details like meeting times and agendas from internal notices, distinguishing between different dates (e.g., meeting on Oct 20 vs. Jan 23).
+
+This video demonstrates how to build a similar RAG system using LangChain and Gemini, which aligns with the architecture described in your report.
+[Build a RAG System with Gemini and LangChain](https://www.google.com/search?q=https://www.youtube.com/watch%3Fv%3D7f5mJqH5KQI)

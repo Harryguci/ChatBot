@@ -2,7 +2,7 @@
 # Script to enable pgvector extension on existing PostgreSQL database
 
 # Database connection parameters
-DB_USER=${DB_USER:-root}
+DB_USER=${DB_USER:-postgres}
 DB_NAME=${DB_NAME:-CHATBOT_OCR_DB}
 DB_HOST=${DB_HOST:-localhost}
 DB_PORT=${DB_PORT:-5432}

@@ -3,6 +3,7 @@ gradio>=4.0.0
 
 # PDF processing
 PyPDF2>=3.0.1
+PyMuPDF>=1.23.0  # High-speed PDF text extraction and rendering
 
 # Image processing
 Pillow>=10.0.0
@@ -21,10 +22,20 @@ torch>=2.0.0
 transformers==4.48.0
 accelerate>=0.34.0
 decord>=0.6.0
-flash-attn>=2.5.8
+# flash-attn>=2.5.8  # DISABLED: Linux/CUDA only, causes installation issues on Windows
+# Note: Vintern embeddings will work without flash-attn, just slightly slower on GPU
 
 # Google Gemini API
 google-generativeai>=0.7.0
+
+# LangChain for RAG orchestration
+langchain>=0.1.0
+langchain-community>=0.1.0
+langchain-google-genai>=0.0.6
+tiktoken>=0.5.0
+
+# Vector stores
+faiss-cpu>=1.7.4  # Local vector store (use faiss-gpu for GPU support)
 
 FastAPI>=0.115.0
 uvicorn>=0.32.0

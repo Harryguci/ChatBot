@@ -376,6 +376,105 @@ class DocumentChunkService(DatabaseService):
 
             return chunks_with_scores
     
+    def find_similar_chunks_with_date_filter(
+        self,
+        query_embedding: List[float],
+        limit: int = 5,
+        threshold: float = 0.7,
+        recency_weight: float = 0.15,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None
+    ) -> List[Tuple[DocumentChunk, float]]:
+        """
+        Find similar chunks using vector similarity search with date filtering.
+
+        Args:
+            query_embedding: Query vector embedding
+            limit: Maximum number of results
+            threshold: Minimum similarity score (0-1)
+            recency_weight: Weight for recency boost (0-1)
+            date_from: Only include chunks created after this date
+            date_to: Only include chunks created before this date
+
+        Returns:
+            List of tuples (DocumentChunk, similarity_score)
+        """
+        from sqlalchemy import text
+
+        with self.db.get_session() as session:
+            # Build date filter condition
+            date_filter = ""
+            if date_from or date_to:
+                conditions = []
+                if date_from:
+                    conditions.append("created_at >= :date_from")
+                if date_to:
+                    conditions.append("created_at <= :date_to")
+                date_filter = "AND " + " AND ".join(conditions)
+
+            query = text(f"""
+                WITH chunk_stats AS (
+                    SELECT
+                        id, document_id, chunk_index, heading, content, content_length,
+                        embedding_model, vintern_model, extra_metadata, created_at,
+                        embedding,
+                        (embedding <=> CAST(:query_vector AS vector)) as distance,
+                        EXTRACT(EPOCH FROM (NOW() - created_at)) as age_seconds,
+                        EXTRACT(EPOCH FROM (NOW() - MIN(created_at) OVER ())) as max_age_seconds
+                    FROM document_chunks
+                    WHERE embedding IS NOT NULL
+                    {date_filter}
+                ),
+                scored_chunks AS (
+                    SELECT *,
+                        (1.0 - distance) as similarity,
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END as recency_score,
+                        (1.0 - distance) * (1.0 - :recency_weight) +
+                        CASE
+                            WHEN max_age_seconds > 0 THEN
+                                EXP(-3.0 * age_seconds / NULLIF(max_age_seconds, 0))
+                            ELSE 1.0
+                        END * :recency_weight as final_score
+                    FROM chunk_stats
+                )
+                SELECT id, document_id, chunk_index, heading, content, content_length,
+                       embedding_model, vintern_model, extra_metadata, created_at,
+                       embedding, distance, similarity, recency_score, final_score
+                FROM scored_chunks
+                ORDER BY final_score DESC
+                LIMIT :limit
+            """)
+
+            # Convert list to string format for PostgreSQL
+            vector_str = '[' + ','.join(map(str, query_embedding)) + ']'
+
+            params = {
+                'query_vector': vector_str,
+                'limit': limit,
+                'recency_weight': recency_weight
+            }
+
+            if date_from:
+                params['date_from'] = date_from
+            if date_to:
+                params['date_to'] = date_to
+
+            result = session.execute(query, params)
+
+            chunks_with_scores = []
+            for row in result:
+                similarity = max(0.0, float(row.final_score))
+                if similarity >= threshold:
+                    chunk = session.query(DocumentChunk).filter(DocumentChunk.id == row.id).first()
+                    if chunk:
+                        chunks_with_scores.append((chunk, similarity))
+
+            return chunks_with_scores
+
     def find_similar_chunks_by_vintern_embedding(self, query_embedding: List[float],
                                                   limit: int = 5, threshold: float = 0.7,
                                                   recency_weight: float = 0.15) -> List[Tuple[DocumentChunk, float]]:

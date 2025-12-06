@@ -91,8 +91,8 @@ class Chatbot:
             genai.configure(api_key=self.google_api_key)
 
             # Use the working Gemini 2.0 Flash model
-            self.llm = genai.GenerativeModel('gemini-2.0-flash-exp')
-            logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-exp")
+            self.llm = genai.GenerativeModel('gemini-2.0-flash-lite')
+            logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-lite")
 
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             logger.info("✓ Đã khởi tạo thành công embedding model")

@@ -41,6 +41,9 @@ interface DocumentInfo {
   chunks_count: number;
   heading: string;
   preview: string;
+  file_size?: number;         // File size in bytes (RAG v2.0)
+  created_at?: string;        // ISO timestamp (RAG v2.0)
+  status?: string;            // Processing status: pending, processed, failed (RAG v2.0)
 }
 
 interface DocumentsListResponse {

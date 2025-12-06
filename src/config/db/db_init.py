@@ -26,28 +26,27 @@ class DatabaseInitializer:
     def create_database(self) -> bool:
         """Create database if it doesn't exist."""
         try:
-            # Connect to PostgreSQL server (not specific database)
+            # Connect to PostgreSQL server (not specific database) with autocommit
             server_url = f"postgresql://{self.config.username}:{self.config.password}@{self.config.host}:{self.config.port}/postgres"
-            engine = create_engine(server_url)
-            
+            engine = create_engine(server_url, isolation_level="AUTOCOMMIT")
+
             with engine.connect() as connection:
                 # Check if database exists
                 result = connection.execute(
                     text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
                     {"db_name": self.config.database}
                 )
-                
+
                 if not result.fetchone():
-                    # Create database
-                    connection.execute(text("COMMIT"))  # End transaction
+                    # Create database (autocommit mode handles transaction)
                     connection.execute(text(f"CREATE DATABASE {self.config.database}"))
                     logger.info(f"Database '{self.config.database}' created successfully")
                 else:
                     logger.info(f"Database '{self.config.database}' already exists")
-            
+
             engine.dispose()
             return True
-            
+
         except SQLAlchemyError as e:
             logger.error(f"Failed to create database: {str(e)}")
             return False
