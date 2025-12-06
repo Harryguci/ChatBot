@@ -62,7 +62,8 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
             idinfo = id_token.verify_oauth2_token(
                 body.token,
                 google_requests.Request(),
-                GOOGLE_CLIENT_ID
+                GOOGLE_CLIENT_ID,
+                clock_skew_in_seconds=10
             )
         except ValueError as e:
             # Token verification failed (invalid token, expired, wrong audience, etc.)
@@ -142,7 +143,9 @@ async def google_auth(body: GoogleAuthRequest, db: Session = Depends(get_db)):
 
         # Note: The database session is managed by the dependency's context manager
         # which will automatically commit on success or rollback on exception
-        # No need to manually commit/rollback here
+        # However, we need to commit here to ensure the user is persisted and has an ID
+        # before we can refresh it or use it to generate a token
+        db.commit()
         db.refresh(user)
 
         # Create JWT access token

@@ -109,6 +109,12 @@ class Chatbot:
                 model_kwargs={"use_safetensors": False},
                 device_map="auto",
             )
+
+            # Fix for GPT-2 tokenizer: Set pad_token to eos_token if not set
+            if self.llm.tokenizer.pad_token is None:
+                self.llm.tokenizer.pad_token = self.llm.tokenizer.eos_token
+                logger.info("Set pad_token to eos_token for GPT-2 tokenizer")
+
             logger.info("✓ Successfully initialized local Vietnamese GPT-2 model: NlpHUST/gpt2-vietnamese")
 
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
@@ -577,6 +583,201 @@ class Chatbot:
             self.cache.set_query_results(query, cache_data, top_k=top_k, search_type="vintern", ttl=3600)
 
             return results
+            deleted = document_service.delete_document_by_filename(filename)
+            if not deleted:
+                return False, f"Failed to delete document '{filename}' from database."
+
+            # Remove from processed_files tracker
+            self.processed_files.discard(filename)
+
+            # Invalidate query cache since documents were deleted
+            self.cache.invalidate_query_cache()
+            logger.info(f"Query cache invalidated after document deletion")
+
+            logger.info(f"Deleted document '{filename}' from database")
+            return True, f"Đã xóa tài liệu '{filename}' từ database."
+
+        except Exception as e:
+            error_msg = f"Lỗi khi xóa tài liệu: {str(e)}"
+            logger.error(error_msg)
+            return False, error_msg
+    
+    def get_documents_list(self) -> List[Dict]:
+        """Trả về danh sách tài liệu đã xử lý với thông tin chi tiết từ database."""
+        try:
+            documents_info = []
+            
+            # Get all documents from database as dictionaries to avoid session issues
+            documents = document_service.get_all_documents_dict()
+            
+            for doc in documents:
+                doc_id = doc['id']
+                
+                # Get chunks for this document
+                chunks = document_chunk_service.get_chunks_by_document(doc_id)
+                
+                # Get the first chunk for preview
+                heading = 'N/A'
+                preview = ''
+                if chunks:
+                    heading = chunks[0].heading or 'N/A'
+                    content_preview = chunks[0].content
+                    preview = content_preview[:150] + "..." if len(content_preview) > 150 else content_preview
+                
+                documents_info.append({
+                    'filename': doc['filename'],
+                    'file_type': doc['file_type'],
+                    'chunks_count': len(chunks),
+                    'heading': heading,
+                    'preview': preview,
+                    'file_size': doc['file_size'],
+                    'created_at': doc['created_at'].isoformat() if doc['created_at'] else None,
+                    'status': doc['processing_status']
+                })
+            
+            return documents_info
+        except Exception as e:
+            logger.error(f"Lỗi khi lấy danh sách tài liệu từ database: {str(e)}")
+            return []
+
+    def search_relevant_documents(self, query: str, top_k: int = 5, recency_weight: float = 0.15) -> List[Tuple[str, float, dict]]:
+        """
+        Tìm kiếm các đoạn văn liên quan trực tiếp từ database với recency boost.
+
+        Args:
+            query: Câu truy vấn
+            top_k: Số lượng kết quả tối đa
+            recency_weight: Trọng số cho độ mới của embeddings (0-1), mặc định 0.15
+
+        Returns:
+            List of tuples (content, similarity_score, metadata)
+        """
+        try:
+            # Try to get cached results
+            cached_results = self.cache.get_query_results(query, top_k=top_k, search_type="text")
+            if cached_results is not None:
+                logger.info(f"Cache HIT for text search: {query[:50]}...")
+                # Convert from dict format back to tuple format
+                return [(r['content'], r['score'], r['metadata']) for r in cached_results]
+
+            # Cache miss - perform database search
+            logger.debug(f"Cache MISS for text search: {query[:50]}...")
+
+            # Generate query embedding with LRU cache
+            query_embedding = self.get_query_embedding(query)
+
+            # Use database service with recency boost
+            chunks_with_scores = document_chunk_service.find_similar_chunks_by_embedding(
+                query_embedding=query_embedding.tolist(),
+                limit=top_k,
+                threshold=0.0,  # We'll filter later if needed
+                recency_weight=recency_weight
+            )
+
+            # Convert to expected format
+            results = []
+            for chunk, score in chunks_with_scores:
+                # Get document info
+                doc = document_service.get_document_by_id(chunk.document_id)
+
+                metadata = {
+                    'chunk_id': chunk.id,
+                    'source_file': doc.filename if doc else 'unknown',
+                    'file_type': doc.file_type if doc else 'unknown',
+                    'heading': chunk.heading or '',
+                    'length': len(chunk.content),
+                    'preview': chunk.content[:150] + "..." if len(chunk.content) > 150 else chunk.content,
+                    'created_at': str(chunk.created_at) if chunk.created_at else None
+                }
+
+                results.append((chunk.content, score, metadata))
+
+            # Cache results for future queries
+            cache_data = [
+                {'content': content, 'score': score, 'metadata': metadata}
+                for content, score, metadata in results
+            ]
+            self.cache.set_query_results(query, cache_data, top_k=top_k, search_type="text", ttl=3600)
+
+            return results
+
+        except Exception as e:
+            logger.error(f"Lỗi tìm kiếm: {str(e)}")
+            return []
+
+    def search_relevant_documents_vintern(self, query: str, top_k: int = 5, recency_weight: float = 0.15) -> List[Tuple[str, float, dict]]:
+        """
+        Tìm kiếm đa phương thức bằng Vintern trực tiếp từ database với recency boost.
+
+        Args:
+            query: Câu truy vấn
+            top_k: Số lượng kết quả tối đa
+            recency_weight: Trọng số cho độ mới của embeddings (0-1), mặc định 0.15
+
+        Returns:
+            List of tuples (content, similarity_score, metadata)
+        """
+        try:
+            if not self.vintern_service.is_enabled():
+                return []
+
+            # Try to get cached results
+            cached_results = self.cache.get_query_results(query, top_k=top_k, search_type="vintern")
+            if cached_results is not None:
+                logger.info(f"Cache HIT for Vintern search: {query[:50]}...")
+                # Convert from dict format back to tuple format
+                return [(r['content'], r['score'], r['metadata']) for r in cached_results]
+
+            # Cache miss - perform database search
+            logger.debug(f"Cache MISS for Vintern search: {query[:50]}...")
+
+            # Chuẩn bị embedding cho query
+            q_emb = self.vintern_service.process_query(query)
+            if q_emb is None:
+                return []
+
+            # Convert tensor to list for database query
+            if isinstance(q_emb, torch.Tensor):
+                query_embedding = q_emb.cpu().numpy().tolist()
+            else:
+                query_embedding = q_emb
+
+            # Use database service with recency boost
+            chunks_with_scores = document_chunk_service.find_similar_chunks_by_vintern_embedding(
+                query_embedding=query_embedding,
+                limit=top_k,
+                threshold=0.0,  # We'll filter later if needed
+                recency_weight=recency_weight
+            )
+
+            # Convert to expected format
+            results: List[Tuple[str, float, dict]] = []
+            for chunk, score in chunks_with_scores:
+                # Get document info
+                doc = document_service.get_document_by_id(chunk.document_id)
+
+                context_text = chunk.content or f"[Tài liệu {doc.file_type if doc else 'unknown'} từ file {doc.filename if doc else '?'}]"
+
+                metadata = {
+                    'type': 'text',
+                    'source_file': doc.filename if doc else 'unknown',
+                    'file_type': doc.file_type if doc else 'unknown',
+                    'heading': chunk.heading or '',
+                    'content': chunk.content,
+                    'preview': chunk.content[:150] + "..." if chunk.content and len(chunk.content) > 150 else chunk.content,
+                    'created_at': str(chunk.created_at) if chunk.created_at else None
+                }
+
+                results.append((context_text, score, metadata))
+
+            # Cache results for future queries
+            cache_data = [
+                {'content': content, 'score': score, 'metadata': metadata}
+                for content, score, metadata in results
+            ]
+            self.cache.set_query_results(query, cache_data, top_k=top_k, search_type="vintern", ttl=3600)
+
+            return results
 
         except Exception as e:
             logger.error(f"Lỗi tìm kiếm Vintern: {str(e)}")
@@ -630,6 +831,13 @@ class Chatbot:
                 if i <= top_results_for_sources and source_file not in source_files:
                     source_files.append(source_file)
 
+            # Limit context length to avoid exceeding model's max position embeddings (usually 1024 for GPT-2)
+            # Vietnamese tokenization can be dense, so we limit to 1500 chars (~500-600 tokens)
+            # to leave room for system prompt and generation
+            if len(context) > 1500:
+                context = context[:1500] + "... (đã cắt bớt)"
+                logger.info(f"Context truncated to 1500 chars to fit model limits")
+
             prompt = f"""
             Bạn là một trợ lý AI chuyên nghiệp, trả lời câu hỏi dựa trên các trích dẫn từ các tài liệu được cung cấp.
 
@@ -641,22 +849,85 @@ class Chatbot:
 
             --- BỐI CẢNH TỪ TÀI LIỆU ---
             {context}
-            
+
             --- CÂU HỎI CỦA NGƯỜI DÙNG ---
             {query}
-            
+
             --- CÂU TRẢ LỜI CÔ ĐỌNG VÀ CHÍNH XÁC ---
             """
 
-            gen_outputs = self.llm(
-                prompt,
-                max_new_tokens=256,
-                do_sample=True,
-                temperature=0.8,
-                top_p=0.95,
-                pad_token_id=self.llm.tokenizer.eos_token_id if hasattr(self.llm, "tokenizer") and self.llm.tokenizer.eos_token_id is not None else None,
-            )
+            # Attempt to generate answer with comprehensive error handling
+            try:
+                # Tokenize and check token count
+                # GPT-2 Vietnamese has max_position_embeddings=1024
+                # We need to leave room for generation (256 tokens), so limit input to 768 tokens max
+                tokenizer = self.llm.tokenizer
+
+                # Tokenize the prompt to check actual token count
+                tokens = tokenizer.encode(prompt, add_special_tokens=True)
+                max_input_tokens = 768  # Leave room for 256 token generation
+
+                if len(tokens) > max_input_tokens:
+                    logger.warning(f"Prompt has {len(tokens)} tokens, truncating to {max_input_tokens} tokens")
+                    # Truncate at token level and decode back to text
+                    truncated_tokens = tokens[:max_input_tokens]
+                    prompt = tokenizer.decode(truncated_tokens, skip_special_tokens=True)
+                    # Add back the instruction footer
+                    prompt += "\n--- CÂU TRẢ LỜI CÔ ĐỌNG VÀ CHÍNH XÁC ---\n"
+                    logger.info(f"Truncated prompt to {len(tokenizer.encode(prompt))} tokens")
+
+                # Prepare generation parameters
+                gen_params = {
+                    "max_new_tokens": 256,
+                    "do_sample": True,
+                    "temperature": 0.8,
+                    "top_p": 0.95,
+                    "return_full_text": False,  # Only return generated text, not the prompt
+                }
+
+                # Set pad_token_id if available
+                if tokenizer.pad_token_id is not None:
+                    gen_params["pad_token_id"] = tokenizer.pad_token_id
+                elif tokenizer.eos_token_id is not None:
+                    gen_params["pad_token_id"] = tokenizer.eos_token_id
+
+                gen_outputs = self.llm(prompt, **gen_params)
+            except IndexError as ie:
+                import traceback
+                error_msg = f"Lỗi khi tạo câu trả lời: {str(ie)}. Có thể do prompt quá dài hoặc vấn đề với tokenizer."
+                logger.error(error_msg)
+                logger.error(f"Prompt length: {len(prompt)} chars")
+                logger.error(f"Token count: {len(tokenizer.encode(prompt))} tokens")
+                logger.error(f"Full traceback: {traceback.format_exc()}")
+                chat_history.append((query, "Xin lỗi, tôi gặp lỗi kỹ thuật khi xử lý câu hỏi của bạn. Vui lòng thử lại với câu hỏi ngắn gọn hơn."))
+                return "", chat_history, []
+            except Exception as gen_error:
+                error_msg = f"Lỗi không mong đợi khi tạo câu trả lời: {str(gen_error)}"
+                logger.error(error_msg)
+                chat_history.append((query, "Xin lỗi, tôi gặp lỗi khi tạo câu trả lời. Vui lòng thử lại."))
+                return "", chat_history, []
+
+            # Validate output structure before accessing
+            if not gen_outputs or len(gen_outputs) == 0:
+                error_msg = "Lỗi tạo câu trả lời: Model không trả về kết quả."
+                logger.error(error_msg)
+                chat_history.append((query, error_msg))
+                return "", chat_history, []
+
+            if not isinstance(gen_outputs[0], dict) or "generated_text" not in gen_outputs[0]:
+                error_msg = "Lỗi tạo câu trả lời: Định dạng kết quả không hợp lệ."
+                logger.error(error_msg)
+                chat_history.append((query, error_msg))
+                return "", chat_history, []
+
             answer = gen_outputs[0]["generated_text"]
+
+            # Validate that combined results exist before accessing
+            if not combined or len(combined) == 0:
+                error_msg = "Lỗi tạo câu trả lời: Không tìm thấy kết quả tìm kiếm."
+                logger.error(error_msg)
+                chat_history.append((query, error_msg))
+                return "", chat_history, []
 
             confidence_score = combined[0][1]
             confidence_info = f"<br/><br/>---<br/><span style='color: #FF6B6B;'>*Độ tin cậy của nguồn chính: {confidence_score:.2%}*</span>"

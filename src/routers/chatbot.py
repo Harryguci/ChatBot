@@ -210,8 +210,7 @@ async def upload_and_process_pdf(
 async def chat_with_documents(
     request: Request,
     body: ChatRequest,
-    chatbot: Chatbot = Depends(get_chatbot),
-    current_user: User = Depends(get_current_active_user)
+    chatbot: Chatbot = Depends(get_chatbot)
 ):
     """
     Ask a question about the uploaded documents and get an answer.
