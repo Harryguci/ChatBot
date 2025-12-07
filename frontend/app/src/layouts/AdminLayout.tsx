@@ -1,8 +1,8 @@
-import React from 'react';
-import { useNavigate, useLocation } from 'react-router-dom';
-import { useAuth } from '../contexts/AuthContext';
-import { Button, Dropdown } from 'antd';
-import type { MenuProps } from 'antd';
+import type { MenuProps } from "antd";
+import { Dropdown } from "antd";
+import React from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { useAuth } from "../contexts/AuthContext";
 
 interface MenuItemProps {
   icon: React.ReactNode;
@@ -18,9 +18,7 @@ const MenuItem: React.FC<MenuItemProps> = ({ icon, label, isActive, to }) => {
     <button
       onClick={() => navigate(to)}
       className={`w-full cursor-pointer flex items-center space-x-3 px-4 py-3 rounded-lg transition-colors ${
-        isActive
-          ? 'bg-blue-600 text-white'
-          : 'text-gray-700 hover:bg-gray-100'
+        isActive ? "bg-blue-600 text-white" : "text-gray-700 hover:bg-gray-100"
       }`}
     >
       <span className="flex-shrink-0">{icon}</span>
@@ -37,20 +35,23 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
   const location = useLocation();
   const navigate = useNavigate();
   const { user, logout } = useAuth();
-  const currentPage = location.pathname === '/admin/dashboard' ? 'dashboard' : 'document-management';
+  const currentPage =
+    location.pathname === "/admin/dashboard"
+      ? "dashboard"
+      : "document-management";
 
   const handleLogout = () => {
     logout();
-    navigate('/login');
+    navigate("/login");
   };
 
   const handleGoToChat = () => {
-    navigate('/');
+    navigate("/");
   };
 
-  const userMenuItems: MenuProps['items'] = [
+  const userMenuItems: MenuProps["items"] = [
     {
-      key: 'profile',
+      key: "profile",
       label: (
         <div className="px-2 py-1">
           <div className="font-medium">{user?.full_name || user?.username}</div>
@@ -61,24 +62,44 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
       disabled: true,
     },
     {
-      type: 'divider',
+      type: "divider",
     },
     {
-      key: 'chat',
-      label: 'Go to Chat',
+      key: "chat",
+      label: "Go to Chat",
       icon: (
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z"
+          />
         </svg>
       ),
       onClick: handleGoToChat,
     },
     {
-      key: 'logout',
-      label: 'Logout',
+      key: "logout",
+      label: "Logout",
       icon: (
-        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        <svg
+          className="w-4 h-4"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={2}
+            d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"
+          />
         </svg>
       ),
       onClick: handleLogout,
@@ -87,8 +108,13 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
   ];
 
   const getUserInitials = (name?: string) => {
-    if (!name) return 'A';
-    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+    if (!name) return "A";
+    return name
+      .split(" ")
+      .map((n) => n[0])
+      .join("")
+      .toUpperCase()
+      .slice(0, 2);
   };
 
   return (
@@ -136,7 +162,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
               </svg>
             }
             label="Dashboard"
-            isActive={currentPage === 'dashboard'}
+            isActive={currentPage === "dashboard"}
             to="/admin/dashboard"
           />
 
@@ -157,18 +183,22 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
               </svg>
             }
             label="Document Management"
-            isActive={currentPage === 'document-management'}
+            isActive={currentPage === "document-management"}
             to="/admin/documents"
           />
         </nav>
 
         {/* Footer with User Info */}
         <div className="h-16 border-t border-gray-200 flex items-center px-4">
-          <Dropdown menu={{ items: userMenuItems }} trigger={['click']} placement="topLeft">
+          <Dropdown
+            menu={{ items: userMenuItems }}
+            trigger={["click"]}
+            placement="topLeft"
+          >
             <button className="flex items-center space-x-3 w-full hover:bg-gray-50 p-2 rounded-lg transition-colors">
               {user?.picture_url ? (
-                <img 
-                  src={user.picture_url} 
+                <img
+                  src={user.picture_url}
                   alt={user.full_name || user.username}
                   className="w-8 h-8 rounded-full"
                 />
@@ -183,10 +213,22 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
                 <span className="text-sm font-medium text-gray-900 truncate">
                   {user?.full_name || user?.username}
                 </span>
-                <span className="text-xs text-gray-500 truncate">{user?.email}</span>
+                <span className="text-xs text-gray-500 truncate">
+                  {user?.email}
+                </span>
               </div>
-              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+              <svg
+                className="w-4 h-4 text-gray-400"
+                fill="none"
+                stroke="currentColor"
+                viewBox="0 0 24 24"
+              >
+                <path
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  strokeWidth={2}
+                  d="M8 9l4-4 4 4m0 6l-4 4-4-4"
+                />
               </svg>
             </button>
           </Dropdown>
@@ -195,9 +237,7 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-y-auto">
-        <div className="h-full bg-gray-50">
-          {children}
-        </div>
+        <div className="h-full bg-gray-50">{children}</div>
       </div>
     </div>
   );
