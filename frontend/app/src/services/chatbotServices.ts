@@ -63,6 +63,32 @@ interface ApiError {
 // Base configuration
 const CHATBOT_API_BASE_URL = `${API_BASE_URL}/chatbot`;
 
+// Helper function to get auth headers
+const getAuthHeaders = (): HeadersInit => {
+  const token = localStorage.getItem('access_token');
+  const headers: HeadersInit = {
+    'Content-Type': 'application/json',
+  };
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+};
+
+// Helper function to get auth headers for FormData
+const getAuthHeadersForFormData = (): HeadersInit => {
+  const token = localStorage.getItem('access_token');
+  const headers: HeadersInit = {};
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+};
+
 // Utility function for error handling
 const handleApiError = async (response: Response): Promise<never> => {
   let errorMessage = 'An unexpected error occurred';
@@ -124,6 +150,7 @@ const chatbotServices = {
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/upload-document`, {
         method: 'POST',
+        headers: getAuthHeadersForFormData(),
         body: formData,
       });
 
@@ -186,9 +213,7 @@ const chatbotServices = {
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/chat`, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: getAuthHeaders(),
         body: JSON.stringify(requestBody),
       });
 
@@ -228,6 +253,7 @@ const chatbotServices = {
     try {
       const response = await fetch(`${CHATBOT_API_BASE_URL}/memory`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {
@@ -306,6 +332,7 @@ const chatbotServices = {
 
       const response = await fetch(`${CHATBOT_API_BASE_URL}/memorable-documents/${encodedFilename}`, {
         method: 'DELETE',
+        headers: getAuthHeaders(),
       });
 
       if (!response.ok) {

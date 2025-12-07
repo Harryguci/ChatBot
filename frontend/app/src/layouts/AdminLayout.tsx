@@ -1,5 +1,8 @@
 import React from 'react';
 import { useNavigate, useLocation } from 'react-router-dom';
+import { useAuth } from '../contexts/AuthContext';
+import { Button, Dropdown } from 'antd';
+import type { MenuProps } from 'antd';
 
 interface MenuItemProps {
   icon: React.ReactNode;
@@ -32,7 +35,61 @@ interface AdminLayoutProps {
 
 const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
   const location = useLocation();
+  const navigate = useNavigate();
+  const { user, logout } = useAuth();
   const currentPage = location.pathname === '/admin/dashboard' ? 'dashboard' : 'document-management';
+
+  const handleLogout = () => {
+    logout();
+    navigate('/login');
+  };
+
+  const handleGoToChat = () => {
+    navigate('/');
+  };
+
+  const userMenuItems: MenuProps['items'] = [
+    {
+      key: 'profile',
+      label: (
+        <div className="px-2 py-1">
+          <div className="font-medium">{user?.full_name || user?.username}</div>
+          <div className="text-xs text-gray-500">{user?.email}</div>
+          <div className="text-xs text-blue-600 mt-1">Role: {user?.role}</div>
+        </div>
+      ),
+      disabled: true,
+    },
+    {
+      type: 'divider',
+    },
+    {
+      key: 'chat',
+      label: 'Go to Chat',
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+        </svg>
+      ),
+      onClick: handleGoToChat,
+    },
+    {
+      key: 'logout',
+      label: 'Logout',
+      icon: (
+        <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+        </svg>
+      ),
+      onClick: handleLogout,
+      danger: true,
+    },
+  ];
+
+  const getUserInitials = (name?: string) => {
+    if (!name) return 'A';
+    return name.split(' ').map(n => n[0]).join('').toUpperCase().slice(0, 2);
+  };
 
   return (
     <div className="h-screen flex bg-gray-50">
@@ -105,17 +162,34 @@ const AdminLayout: React.FC<AdminLayoutProps> = ({ children }) => {
           />
         </nav>
 
-        {/* Footer */}
-        <div className="h-16 border-t border-gray-200 flex items-center px-6">
-          <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
-              <span className="text-white text-sm font-medium">A</span>
-            </div>
-            <div className="flex flex-col">
-              <span className="text-sm font-medium text-gray-900">Admin User</span>
-              <span className="text-xs text-gray-500">admin@example.com</span>
-            </div>
-          </div>
+        {/* Footer with User Info */}
+        <div className="h-16 border-t border-gray-200 flex items-center px-4">
+          <Dropdown menu={{ items: userMenuItems }} trigger={['click']} placement="topLeft">
+            <button className="flex items-center space-x-3 w-full hover:bg-gray-50 p-2 rounded-lg transition-colors">
+              {user?.picture_url ? (
+                <img 
+                  src={user.picture_url} 
+                  alt={user.full_name || user.username}
+                  className="w-8 h-8 rounded-full"
+                />
+              ) : (
+                <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-pink-500 rounded-full flex items-center justify-center">
+                  <span className="text-white text-sm font-medium">
+                    {getUserInitials(user?.full_name || user?.username)}
+                  </span>
+                </div>
+              )}
+              <div className="flex flex-col flex-1 text-left">
+                <span className="text-sm font-medium text-gray-900 truncate">
+                  {user?.full_name || user?.username}
+                </span>
+                <span className="text-xs text-gray-500 truncate">{user?.email}</span>
+              </div>
+              <svg className="w-4 h-4 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 9l4-4 4 4m0 6l-4 4-4-4" />
+              </svg>
+            </button>
+          </Dropdown>
         </div>
       </div>
 

@@ -13,10 +13,14 @@ import AdminLayout from "./layouts/AdminLayout";
 import ChatBotPage from "./pages/ChatBotPage";
 import DashboardPage from "./pages/admin/DashboardPage";
 import DocumentManagementPage from "./pages/admin/DocumentManagementPage";
+import LoginPage from "./pages/LoginPage";
+import ProtectedRoute from "./components/ProtectedRoute";
+import { AuthProvider } from "./contexts/AuthContext";
 
 const routeTitles: Record<string, string> = {
   "/": "Chat Bot",
   "/chat": "Chat Bot",
+  "/login": "Login",
   "/admin/dashboard": "Admin Dashboard",
   "/admin/documents": "Document Management",
 };
@@ -36,29 +40,50 @@ function App() {
   return (
     <AntApp>
       <Router>
-        <DocumentTitle />
-        <Routes>
-          {/* Chat Bot Page (User) */}
-          <Route path="/" element={<ChatBotPage />} />
-          <Route path="/chat" element={<ChatBotPage />} />
+        <AuthProvider>
+          <DocumentTitle />
+          <Routes>
+            {/* Public Routes */}
+            <Route path="/login" element={<LoginPage />} />
 
-          {/* Admin Pages */}
-          <Route
-            path="/admin"
-            element={
-              <AdminLayout>
-                <Outlet />
-              </AdminLayout>
-            }
-          >
-            <Route index element={<Navigate to="/admin/dashboard" replace />} />
-            <Route path="dashboard" element={<DashboardPage />} />
-            <Route path="documents" element={<DocumentManagementPage />} />
-          </Route>
+            {/* Protected Chat Bot Page (User) */}
+            <Route
+              path="/"
+              element={
+                <ProtectedRoute>
+                  <ChatBotPage />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/chat"
+              element={
+                <ProtectedRoute>
+                  <ChatBotPage />
+                </ProtectedRoute>
+              }
+            />
 
-          {/* 404 - Redirect to chat */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Routes>
+            {/* Protected Admin Pages */}
+            <Route
+              path="/admin"
+              element={
+                <ProtectedRoute requireAdmin={true}>
+                  <AdminLayout>
+                    <Outlet />
+                  </AdminLayout>
+                </ProtectedRoute>
+              }
+            >
+              <Route index element={<Navigate to="/admin/dashboard" replace />} />
+              <Route path="dashboard" element={<DashboardPage />} />
+              <Route path="documents" element={<DocumentManagementPage />} />
+            </Route>
+
+            {/* 404 - Redirect to login or chat based on auth status */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Routes>
+        </AuthProvider>
       </Router>
     </AntApp>
   );

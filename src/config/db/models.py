@@ -24,18 +24,31 @@ class User(Base):
     
     id = Column(Integer, primary_key=True, index=True)
     username = Column(String(255), unique=True, nullable=False, index=True)
-    email = Column(String(255), unique=True, nullable=True, index=True)
+    email = Column(String(255), unique=True, nullable=False, index=True)
     full_name = Column(String(255), nullable=True)
+    
+    # Google OAuth fields
+    google_id = Column(String(255), unique=True, nullable=True, index=True)
+    picture_url = Column(String(500), nullable=True)
+    
+    # Role-based access control
+    role = Column(String(50), default='user', nullable=False, index=True)
+    
+    # Account status
+    is_active = Column(Boolean, default=True, nullable=False)
+    is_verified = Column(Boolean, default=False, nullable=False)
+    
+    # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
-    is_active = Column(Boolean, default=True, nullable=False)
+    last_login = Column(DateTime, nullable=True)
     
     # Relationships
     conversations = relationship("Conversation", back_populates="user")
     chatbot_sessions = relationship("ChatbotSession", back_populates="user")
     
     def __repr__(self):
-        return f"<User(id={self.id}, username='{self.username}')>"
+        return f"<User(id={self.id}, username='{self.username}', role='{self.role}')>"
 
 
 class Document(Base):

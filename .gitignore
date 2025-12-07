@@ -64,6 +64,7 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+docs/temp
 
 # PyBuilder
 .pybuilder/
@@ -158,3 +159,4 @@ frontend/release/
 frontend/app/.env.development
 frontend/app/.env.production
 .claude/settings.local.json
+logs/

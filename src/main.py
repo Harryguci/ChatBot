@@ -8,6 +8,13 @@ from starlette.status import HTTP_404_NOT_FOUND
 import uvicorn
 import os
 from dotenv import load_dotenv
+import logging
+
+# Initialize logging first
+from src.config.logging_config import init_logging
+init_logging()
+
+logger = logging.getLogger(__name__)
 
 from src.config.db.services import system_log_service
 
@@ -17,6 +24,9 @@ load_dotenv()
 # Import chatbot router
 from src.routers.chatbot import router as chatbot_router
 
+# Import authentication router
+from src.routers.auth import router as auth_router
+
 # Import database connection
 from src.config.db import get_database_connection, initialize_database
 
@@ -25,19 +35,20 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager for database initialization."""
     # Startup
     try:
+        logger.info("Starting application...")
         # Initialize database connection
         db = initialize_database()
         
         # Test connection
         if db.test_connection():
-            print("✓ Database connection established")
+            logger.info("✓ Database connection established")
             system_log_service.log_event(
                 level="INFO",
                 logger_name="app.startup",
                 message="Database connection established successfully"
             )
         else:
-            print("✗ Database connection failed")
+            logger.error("✗ Database connection failed")
             system_log_service.log_event(
                 level="ERROR", 
                 logger_name="app.startup",
@@ -45,7 +56,7 @@ async def lifespan(app: FastAPI):
             )
             
     except Exception as e:
-        print(f"✗ Database initialization failed: {str(e)}")
+        logger.error(f"✗ Database initialization failed: {str(e)}", exc_info=True)
         system_log_service.log_event(
             level="ERROR",
             logger_name="app.startup", 
@@ -58,9 +69,9 @@ async def lifespan(app: FastAPI):
     try:
         from src.config.db import close_database
         close_database()
-        print("✓ Database connection closed")
+        logger.info("✓ Database connection closed")
     except Exception as e:
-        print(f"✗ Error closing database: {str(e)}")
+        logger.error(f"✗ Error closing database: {str(e)}")
 
 app = FastAPI()
 
@@ -96,7 +107,8 @@ def health_check():
             "error": str(e)
         }
 
-# Include chatbot router AFTER other API endpoints
+# Include routers
+app.include_router(auth_router)
 app.include_router(chatbot_router)
 
 # Serve static assets from Vite build

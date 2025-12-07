@@ -11,6 +11,10 @@ import asyncio
 # Import the PDFChatbot class
 from ..chatbot_memory import Chatbot
 
+# Import authentication dependencies
+from ..auth.dependencies import get_current_active_user, require_admin
+from ..config.db.models import User
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -86,11 +90,14 @@ async def get_chatbot() -> Chatbot:
 @router.post("/upload-document", response_model=ProcessPDFResponse)
 async def upload_and_process_document(
     file: UploadFile = File(...),
-    chatbot: Chatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(require_admin)
 ):
     """
     Upload and process a PDF file or image for the chatbot to use in answering questions.
     Supports PDF, JPG, PNG, BMP, GIF, TIFF, and WEBP files.
+    
+    **Admin only** - Requires authentication with admin role.
     """
     try:
         # Validate file type
@@ -143,11 +150,14 @@ async def upload_and_process_document(
 @router.post("/upload-pdf", response_model=ProcessPDFResponse)
 async def upload_and_process_pdf(
     file: UploadFile = File(...),
-    chatbot: Chatbot = Depends(get_chatbot)
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(require_admin)
 ):
     """
     Upload and process a PDF file for the chatbot to use in answering questions.
     This endpoint is kept for backward compatibility. Use /upload-document for both PDF and images.
+    
+    **Admin only** - Requires authentication with admin role.
     """
     try:
         # Validate file type - only PDF
@@ -234,9 +244,14 @@ async def chat_with_documents(
         raise HTTPException(status_code=500, detail=f"Error generating answer: {str(e)}")
 
 @router.delete("/memory")
-async def clear_memory(chatbot: Chatbot = Depends(get_chatbot)):
+async def clear_memory(
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(require_admin)
+):
     """
     Clear all uploaded documents and chat history from the chatbot's memory.
+    
+    **Admin only** - Requires authentication with admin role.
     """
     try:
         chatbot.clear_memory()
@@ -319,9 +334,15 @@ async def list_documents(chatbot: Chatbot = Depends(get_chatbot)):
         raise HTTPException(status_code=500, detail=f"Error getting documents list: {str(e)}")
 
 @router.delete("/memorable-documents/{filename:path}")
-async def delete_document(filename: str, chatbot: Chatbot = Depends(get_chatbot)):
+async def delete_document(
+    filename: str,
+    chatbot: Chatbot = Depends(get_chatbot),
+    current_user: User = Depends(require_admin)
+):
     """
     Delete a specific document from memory by filename.
+    
+    **Admin only** - Requires authentication with admin role.
     """
     try:
         success, message = chatbot.delete_document(filename)
