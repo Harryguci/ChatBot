@@ -90,9 +90,10 @@ class Chatbot:
             logger.info(f"API Key được sử dụng: {self.google_api_key[:10]}..." if self.google_api_key else "API Key không tồn tại")
             genai.configure(api_key=self.google_api_key)
 
-            # Use the working Gemini 2.0 Flash model
-            self.llm = genai.GenerativeModel('gemini-2.0-flash-lite')
-            logger.info("✓ Đã khởi tạo thành công model: gemini-2.0-flash-lite")
+            # Load model name from environment variable
+            llm_model_name = os.getenv('LLM_MODEL', 'gemini-2.0-flash-lite')
+            self.llm = genai.GenerativeModel(llm_model_name)
+            logger.info(f"✓ Đã khởi tạo thành công model: {llm_model_name}")
 
             self.embedding_model = SentenceTransformer('paraphrase-multilingual-MiniLM-L12-v2')
             logger.info("✓ Đã khởi tạo thành công embedding model")

@@ -33,7 +33,7 @@ class GeminiModel(IGeminiModel):
     _instance: Optional["GeminiModel"] = None
     _lock = threading.Lock()
 
-    DEFAULT_MODEL_NAME = 'gemini-2.0-flash-lite'
+    DEFAULT_MODEL_NAME = os.getenv('LLM_MODEL', 'gemini-2.5-flash-lite')
 
     def __new__(cls, *args, **kwargs):
         if cls._instance is None:

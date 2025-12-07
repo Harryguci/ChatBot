@@ -46,7 +46,7 @@ class RAGConfig:
 
     # Model Configuration
     text_embedding_model: str = "paraphrase-multilingual-MiniLM-L12-v2"
-    llm_model: str = "gemini-2.0-flash-lite"
+    llm_model: str = "gemini-2.5-flash-lite"
 
     @classmethod
     def from_env(cls) -> 'RAGConfig':
@@ -135,7 +135,7 @@ class RAGConfig:
             'TEXT_EMBEDDING_MODEL',
             'paraphrase-multilingual-MiniLM-L12-v2'
         )
-        config.llm_model = os.getenv('LLM_MODEL', 'gemini-2.0-flash-lite')
+        config.llm_model = os.getenv('LLM_MODEL', 'gemini-2.5-flash-lite')
 
         logger.info("RAG Configuration loaded:")
         logger.info(f"  - FAISS enabled: {config.use_faiss}")
