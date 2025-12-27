@@ -75,19 +75,27 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI()
 
-# Add CORS middleware
+# Add CORS middleware (restrict to frontend URL from environment)
+frontend_url = os.getenv("FRONTEND_URL", "").strip()
+allowed_origins = [frontend_url] if frontend_url else []
+
+if not allowed_origins:
+    # Fallback to common localhost dev URLs if env not set
+    logger.warning("FRONTEND_URL not set; defaulting CORS to localhost dev URLs")
+    allowed_origins = [
+        "http://localhost:3000",
+        "http://localhost:5173",
+    ]
+else:
+    logger.info(f"CORS allowed origins set to: {allowed_origins}")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, specify your frontend domain
+    allow_origins=allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-# API endpoints - define these first
-# @app.get("/api/")
-# def read_root():
-#     return {"message": "Hello World"}
 
 @app.get("/api/health")
 def health_check():

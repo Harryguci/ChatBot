@@ -160,3 +160,7 @@ frontend/app/.env.development
 frontend/app/.env.production
 .claude/settings.local.json
 logs/
+
+# phoGET converter cache
+convertPhoGPT/phogpt_conversion
+convertPhoGPT/models/PhoGPT-4B-Chat.gguf
