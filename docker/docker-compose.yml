@@ -26,6 +26,18 @@ services:
     networks:
       - chatbot-network
 
+  # Ollama LLM server (CPU-only by default)
+  ollama:
+    image: ollama/ollama:latest
+    container_name: chatbot-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_data:/root/.ollama
+    restart: unless-stopped
+    networks:
+      - chatbot-network
+
   # # Backend FastAPI service
   # backend:
   #   build:
@@ -112,4 +124,6 @@ volumes:
   chatbot-data:
     driver: local
   postgres_data:
+    driver: local
+  ollama_data:
     driver: local
