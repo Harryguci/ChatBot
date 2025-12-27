@@ -5,11 +5,8 @@ This module provides functionality to initialize the database schema
 with all required tables, indexes, and constraints.
 
 Usage:
-    python src/migrations/initalization.py
-    
-    Or import and use programmatically:
-    from src.migrations.initalization import initialize_database
-    initialize_database()
+    python src/migrations/20251026_2340_initalization.py
+    python src/migrations/20251026_2340_initalization.py verify
 """
 
 import logging

@@ -8,7 +8,7 @@ This script:
 4. Creates vector similarity indexes
 
 Usage:
-    python src/migrations/update_to_pgvector.py
+    python src/migrations/20251026_2327_update_to_pgvector.py
 """
 
 import logging
@@ -221,4 +221,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

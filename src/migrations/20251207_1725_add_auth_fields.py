@@ -4,8 +4,8 @@ Migration script to add authentication fields to users table.
 This script adds Google OAuth and role-based access control fields to the users table.
 
 Usage:
-    python src/migrations/add_auth_fields.py          # Apply migration
-    python src/migrations/add_auth_fields.py --rollback  # Rollback migration
+    python src/migrations/20251207_1725_add_auth_fields.py          # Apply migration
+    python src/migrations/20251207_1725_add_auth_fields.py --rollback  # Rollback migration
 """
 
 import sys
@@ -222,4 +222,3 @@ if __name__ == "__main__":
         success = apply_migration()
     
     sys.exit(0 if success else 1)
-

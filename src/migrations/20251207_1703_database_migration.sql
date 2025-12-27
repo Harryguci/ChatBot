@@ -53,4 +53,3 @@ ON document_chunks USING ivfflat (vintern_embedding vector_cosine_ops)
 WITH (lists = 100);
 
 COMMIT;
-

@@ -595,7 +595,7 @@ Total: ~5 seconds (max of both)
 ┌─────────────────────────────────────────┐
 │  documents                              │
 ├─────────────────────────────────────────┤
-│  id                SERIAL PK             │
+│  id                SERIAL PK            │
 │  filename          VARCHAR              │
 │  original_filename VARCHAR              │
 │  file_type         VARCHAR              │
@@ -611,17 +611,17 @@ Total: ~5 seconds (max of both)
 ┌──────────▼──────────────────────────────┐
 │  document_chunks                        │
 ├─────────────────────────────────────────┤
-│  id                 SERIAL PK            │
-│  document_id        INTEGER FK           │
-│  chunk_index        INTEGER              │
-│  heading            VARCHAR              │
-│  content            TEXT                 │
-│  embedding          VECTOR(384)          │
-│  vintern_embedding  VECTOR(768)          │
-│  embedding_model    VARCHAR              │
-│  vintern_model      VARCHAR              │
-│  metadata           JSONB                │
-│  created_at         TIMESTAMP            │
+│  id                 SERIAL PK           │
+│  document_id        INTEGER FK          │
+│  chunk_index        INTEGER             │
+│  heading            VARCHAR             │
+│  content            TEXT                │
+│  embedding          VECTOR(384)         │
+│  vintern_embedding  VECTOR(768)         │
+│  embedding_model    VARCHAR             │
+│  vintern_model      VARCHAR             │
+│  metadata           JSONB               │
+│  created_at         TIMESTAMP           │
 └─────────────────────────────────────────┘
 ```
 
@@ -634,7 +634,7 @@ Total: ~5 seconds (max of both)
 │                  Chatbot                         │
 ├──────────────────────────────────────────────────┤
 │  Depends on:                                     │
-│  ├─> Gemini (google.generativeai)               │
+│  ├─> Gemini (google.generativeai)                │
 │  ├─> SentenceTransformer                         │
 │  ├─> VinternEmbeddingService                     │
 │  ├─> IngestionService                            │
@@ -701,7 +701,7 @@ async def get_chatbot() -> Chatbot:
 ├────────────────────────────────────┤
 │                                    │
 │  Gemini LLM                        │
-│  ├─> Success ✓                     │
+│  ├─> Success ✓                    │
 │  └─> Failure → Exception           │
 │                                    │
 │  SentenceTransformer               │

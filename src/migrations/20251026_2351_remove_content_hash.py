@@ -8,7 +8,7 @@ This migration:
 Run this after migrating to pgvector to clean up the old schema.
 
 Usage:
-    python src/migrations/remove_content_hash.py
+    python src/migrations/20251026_2351_remove_content_hash.py
 """
 
 import logging
@@ -184,4 +184,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
