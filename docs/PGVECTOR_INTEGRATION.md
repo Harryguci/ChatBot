@@ -31,7 +31,7 @@ This document describes the migration from storing embeddings as JSON to using P
 - **Updated** all embedding access to use `vector_to_numpy()` conversion
 - **Updated** Vintern embedding loading to handle Vector types
 
-### 4. Database Initialization (`src/migrations/initalization.py`)
+### 4. Database Initialization (`src/migrations/20251026_2340_initalization.py`)
 
 - **Added** pgvector extension installation to initialization process
 - **Updated** critical indexes list to include vector indexes
@@ -59,14 +59,14 @@ CREATE EXTENSION IF NOT EXISTS vector;
 .venv/Scripts/activate
 
 # Run the pgvector migration
-python src/migrations/update_to_pgvector.py
+python src/migrations/20251026_2327_update_to_pgvector.py
 ```
 
 ### 3. Verify Installation
 
 ```bash
 # Check if extension is installed
-python src/migrations/initalization.py verify
+python src/migrations/20251026_2340_initalization.py verify
 ```
 
 ## Vector Similarity Search

@@ -201,7 +201,7 @@ results = chatbot.search_relevant_documents("your query", top_k=5)
 
 ### Verify Database Setup
 ```bash
-python src/migrations/initalization.py verify
+python src/migrations/20251026_2340_initalization.py verify
 ```
 
 Expected output:

@@ -144,7 +144,7 @@ New authentication dependencies:
 Apply the authentication fields migration to add new columns to the `users` table:
 
 ```bash
-python src/migrations/add_auth_fields.py
+python src/migrations/20251207_1725_add_auth_fields.py
 ```
 
 This adds:
@@ -158,7 +158,7 @@ This adds:
 To rollback (if needed):
 
 ```bash
-python src/migrations/add_auth_fields.py --rollback
+python src/migrations/20251207_1725_add_auth_fields.py --rollback
 ```
 
 ### 4. Start the Application
@@ -528,7 +528,7 @@ CREATE TABLE users (
 
 If you have existing users in the database before authentication:
 
-1. **Run Migration**: `python src/migrations/add_auth_fields.py`
+1. **Run Migration**: `python src/migrations/20251207_1725_add_auth_fields.py`
 2. **Link Google Accounts**: When existing user logs in with Google, system will link `google_id` to existing user by email
 3. **Assign Roles**: Update existing users' roles:
    ```sql

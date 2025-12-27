@@ -46,7 +46,7 @@ npm install
 ### 4. Run Database Migration
 
 ```bash
-python src/migrations/add_auth_fields.py
+python src/migrations/20251207_1725_add_auth_fields.py
 ```
 
 ### 5. Start Application

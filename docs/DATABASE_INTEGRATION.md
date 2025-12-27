@@ -69,7 +69,7 @@ docker-compose up -d postgres
 
 2. **Run migration** (if needed):
 ```bash
-python -m src.migrations.add_vintern_fields
+python src/migrations/20251026_2229_add_vintern_fields.py
 ```
 
 3. **Start the application**:
@@ -109,7 +109,7 @@ If you have existing in-memory chatbot:
 
 ```bash
 # Add Vintern fields
-python -m src.migrations.add_vintern_fields
+python src/migrations/20251026_2229_add_vintern_fields.py
 ```
 
 ## Performance Considerations
