@@ -121,14 +121,14 @@ LIMIT 5;
 The current implementation uses **IVFFlat** indexes:
 
 ```sql
-CREATE INDEX ix_document_chunks_embedding_cosine 
+CREATE INDEX ix_document_chunks_embedding_cosine
 ON document_chunks USING ivfflat (embedding vector_cosine_ops);
 ```
 
 For better performance with very large datasets (>100K vectors), consider using HNSW:
 
 ```sql
-CREATE INDEX ix_document_chunks_embedding_cosine 
+CREATE INDEX ix_document_chunks_embedding_cosine
 ON document_chunks USING hnsw (embedding vector_cosine_ops);
 ```
 
@@ -156,6 +156,7 @@ print(f"Found {len(results)} similar chunks")
 ### Issue: "Extension 'vector' does not exist"
 
 **Solution**: Install pgvector on your PostgreSQL server:
+
 ```bash
 # On Ubuntu/Debian
 sudo apt-get install postgresql-15-pgvector
@@ -170,6 +171,7 @@ CREATE EXTENSION vector;
 ### Issue: "Cannot import pgvector"
 
 **Solution**: Install the Python package:
+
 ```bash
 pip install pgvector
 ```
@@ -177,6 +179,7 @@ pip install pgvector
 ### Issue: Dimension mismatch errors
 
 **Solution**: Ensure your embedding dimensions match the Vector column definition:
+
 - Text embeddings: 384 dimensions
 - Vintern embeddings: 768 dimensions
 
@@ -185,4 +188,3 @@ pip install pgvector
 - [pgvector GitHub](https://github.com/pgvector/pgvector)
 - [pgvector Documentation](https://github.com/pgvector/pgvector#documentation)
 - [SQLAlchemy pgvector](https://github.com/pgvector/pgvector-python)
-

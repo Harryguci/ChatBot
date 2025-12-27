@@ -14,12 +14,14 @@ The PDFChatbot has been updated to use PostgreSQL database for persistent storag
 ### 1. Database Models (`src/config/db/models.py`)
 
 Added new fields to `DocumentChunk` model:
+
 - `vintern_embedding`: JSON field to store Vintern multimodal embeddings
 - `vintern_model`: Model version string for Vintern embeddings
 
 ### 2. Database Services (`src/config/db/services.py`)
 
 New methods added to `DocumentChunkService`:
+
 - `get_all_chunks_with_embeddings()`: Load all chunks with embeddings
 - `get_all_chunks_with_vintern_embeddings()`: Load chunks with Vintern embeddings
 - `update_chunk_embedding()`: Update standard embeddings
@@ -28,16 +30,19 @@ New methods added to `DocumentChunkService`:
 ### 3. PDFChatbot Updates (`src/chatbot_memory.py`)
 
 #### New Imports
+
 - Database services and models
 - Hashlib for content hashing
 
 #### New Methods
+
 - `vintern_embed_texts()`: Create Vintern embeddings for text
 - `vintern_embed_images()`: Create Vintern embeddings for images
 
 #### Updated `process_document()` Method
 
 The document processing now:
+
 1. **Calculates content hash** to check for duplicates
 2. **Checks database** for existing documents with same hash
 3. **Loads from database** if document exists
@@ -48,11 +53,13 @@ The document processing now:
 ## Database Schema
 
 ### Document Table
+
 - Stores document metadata
 - Tracks processing status
 - Content hash for deduplication
 
 ### DocumentChunk Table
+
 - Stores text chunks with headings
 - Standard embeddings (JSON array)
 - Vintern multimodal embeddings (JSON array)
@@ -63,16 +70,19 @@ The document processing now:
 ### Initial Setup
 
 1. **Ensure database is running**:
+
 ```bash
 docker-compose up -d postgres
 ```
 
 2. **Run migration** (if needed):
+
 ```bash
 python src/migrations/20251026_2229_add_vintern_fields.py
 ```
 
 3. **Start the application**:
+
 ```bash
 python src/main.py
 ```
@@ -131,6 +141,7 @@ python src/migrations/20251026_2229_add_vintern_fields.py
 ### Database Connection Issues
 
 Check `.env` file has correct database credentials:
+
 ```
 DB_HOST=localhost
 DB_PORT=5432
@@ -142,6 +153,7 @@ DB_PASSWORD=postgres
 ### Migration Errors
 
 If migration fails:
+
 ```bash
 # Drop and recreate tables
 python src/config/db/db_init.py
@@ -150,6 +162,7 @@ python src/config/db/db_init.py
 ### Memory Issues
 
 If still seeing memory issues:
+
 1. Reduce batch size in chunking
 2. Implement lazy loading of embeddings
 3. Use database-only search (remove in-memory cache)
