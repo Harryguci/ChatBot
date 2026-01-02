@@ -164,3 +164,9 @@ logs/
 # phoGET converter cache
 convertPhoGPT/phogpt_conversion
 convertPhoGPT/models/PhoGPT-4B-Chat.gguf
+
+nul
+phoGPT/train/frontend/my-app/bun.lock
+phoGPT/train/=0.13.0
+phoGPT/train/=0.35.0
+phoGPT/train/=4.46.0
